@@ -79,11 +79,26 @@ The system works perfectly without physical hardware using the web-based virtual
 
 ## 📦 Installation
 
+### Prerequisites
+
+- **AWS Account**: Required for Amazon Nova Sonic and Amazon Bedrock access
+- **AWS Credentials**: Configure your AWS credentials with access to:
+  - Amazon Bedrock
+  - Amazon Nova Sonic
+  
+```bash
+# Configure AWS credentials (if not already set up)
+aws configure
+```
+
 ### Dependencies
 ```bash
 # Clone repository
 git clone <repository-url>
 cd AIRobotAssistant
+
+# macOS: Install PortAudio (required for pyaudio)
+brew install portaudio
 
 # Create virtual environment (Python 3.12+ required)
 python3.12 -m venv venv
