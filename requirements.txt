@@ -1,0 +1,32 @@
+# Python Version Requirement: 3.12+ for Nova Sonic SDK
+# For servo calibration only: Python 3.11+ is fine
+
+# Hardware Control (Raspberry Pi/Jetson)
+adafruit-circuitpython-servokit
+gpiozero
+
+# Computer Vision
+opencv-python
+
+# Voice Assistant - Nova Sonic (Requires Python 3.12+)
+pyaudio>=0.2.13
+rx>=3.2.0
+smithy-aws-core>=0.0.1
+pytz
+aws_sdk_bedrock_runtime>=0.1.0,<0.2.0
+boto3>=1.34.0
+phonemizer>=3.2.1
+g2p-en>=2.1.0
+
+# Web Interface
+flask>=3.0.0
+flask-socketio>=5.3.0
+
+# Audio Analysis (for audio-based phoneme detection)
+librosa>=0.11.0
+numpy>=1.22.3
+scipy>=1.6.0
+pocketsphinx>=5.0.0
+
+# Syllable Detection
+eng-to-ipa>=0.0.2

@@ -1,0 +1,1267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Mouth Visualizer</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 600px;
+            width: 100%;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+        }
+        
+        .mouth-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 400px;
+            background: #f8f9fa;
+            border-radius: 15px;
+            margin: 20px 0;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .robot-head {
+            position: relative;
+            width: 300px;
+            height: 400px;
+        }
+        
+        /* Skull structure */
+        .head-outline {
+            position: absolute;
+            width: 220px;
+            height: 280px;
+            left: 40px;
+            top: 10px;
+            background: linear-gradient(135deg, #f5f5f5 0%, #d0d0d0 100%);
+            border-radius: 110px 110px 60px 60px;
+            border: 3px solid #888;
+            box-shadow: inset 0 5px 30px rgba(0,0,0,0.15), 0 5px 20px rgba(0,0,0,0.2);
+        }
+        
+        /* Skull details */
+        .skull-detail {
+            position: absolute;
+            width: 180px;
+            height: 200px;
+            left: 60px;
+            top: 40px;
+            border-radius: 90px 90px 40px 40px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.3) 0%, transparent 100%);
+        }
+        
+        /* Eye sockets */
+        .eye-socket {
+            position: absolute;
+            width: 55px;
+            height: 55px;
+            background: radial-gradient(circle, #1a1a1a 0%, #000 100%);
+            border-radius: 50%;
+            border: 2px solid #666;
+            box-shadow: inset 0 3px 10px rgba(0,0,0,0.8);
+        }
+        
+        .eye-socket.left {
+            top: 90px;
+            left: 70px;
+        }
+        
+        .eye-socket.right {
+            top: 90px;
+            right: 70px;
+        }
+        
+        /* Eyes (blue LED style) */
+        .eye {
+            position: absolute;
+            width: 35px;
+            height: 35px;
+            background: radial-gradient(circle, #4da6ff 0%, #0066cc 50%, #003d7a 100%);
+            border-radius: 50%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 15px rgba(77, 166, 255, 0.8), 0 0 30px rgba(77, 166, 255, 0.4);
+            animation: eyeGlow 2s ease-in-out infinite;
+            transition: transform 0.08s ease-out, opacity 0.08s ease-out;
+            overflow: hidden;
+        }
+        
+        .eye.blinking {
+            transform: translate(-50%, -50%) scaleY(0.05) !important;
+            opacity: 0.2 !important;
+            animation: none !important;
+            box-shadow: none !important;
+        }
+        
+        @keyframes eyeGlow {
+            0%, 100% { box-shadow: 0 0 15px rgba(77, 166, 255, 0.8), 0 0 30px rgba(77, 166, 255, 0.4); }
+            50% { box-shadow: 0 0 20px rgba(77, 166, 255, 1), 0 0 40px rgba(77, 166, 255, 0.6); }
+        }
+        
+        /* Eye pupils */
+        .pupil {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            background: #fff;
+            border-radius: 50%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 5px rgba(255, 255, 255, 0.8);
+        }
+        
+        /* Nose cavity */
+        .nose {
+            position: absolute;
+            width: 25px;
+            height: 30px;
+            background: #1a1a1a;
+            border: 2px solid #666;
+            border-radius: 50% 50% 40% 40%;
+            top: 150px;
+            left: 50%;
+            transform: translateX(-50%);
+            box-shadow: inset 0 2px 8px rgba(0,0,0,0.8);
+        }
+        
+        /* Upper jaw (fixed) - teeth visible */
+        .upper-jaw {
+            position: absolute;
+            width: 140px;
+            height: 45px;
+            background: linear-gradient(180deg, #e8e8e8 0%, #c0c0c0 100%);
+            border: 2px solid #888;
+            border-radius: 15px 15px 0 0;
+            left: 80px;
+            top: 200px;
+            z-index: 2;
+            box-shadow: inset 0 2px 5px rgba(255,255,255,0.5);
+        }
+        
+        /* Upper teeth */
+        .upper-teeth {
+            position: absolute;
+            bottom: 0;
+            left: 10px;
+            right: 10px;
+            height: 15px;
+            display: flex;
+            gap: 2px;
+            justify-content: space-around;
+        }
+        
+        .tooth {
+            width: 8px;
+            height: 15px;
+            background: linear-gradient(180deg, #fff 0%, #f0f0f0 100%);
+            border: 1px solid #ccc;
+            border-radius: 2px 2px 0 0;
+        }
+        
+        /* Lower jaw (moves) */
+        .lower-jaw {
+            position: absolute;
+            width: 140px;
+            height: 60px;
+            background: linear-gradient(180deg, #c0c0c0 0%, #a0a0a0 100%);
+            border: 2px solid #888;
+            border-radius: 0 0 30px 30px;
+            left: 80px;
+            top: 245px;
+            transition: transform 0.1s ease-out;
+            z-index: 1;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+            transform-origin: center center;
+            will-change: transform;
+        }
+        
+        /* Lower teeth */
+        .lower-teeth {
+            position: absolute;
+            top: 0;
+            left: 10px;
+            right: 10px;
+            height: 15px;
+            display: flex;
+            gap: 2px;
+            justify-content: space-around;
+        }
+        
+        /* Mechanical details */
+        .mech-detail {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            background: #555;
+            border-radius: 50%;
+            border: 1px solid #333;
+        }
+        
+        .mech-detail.left {
+            top: 120px;
+            left: 35px;
+        }
+        
+        .mech-detail.right {
+            top: 120px;
+            right: 35px;
+        }
+        
+        /* Jaw servo mechanism */
+        .jaw-servo {
+            position: absolute;
+            width: 20px;
+            height: 25px;
+            background: linear-gradient(135deg, #666 0%, #444 100%);
+            border: 2px solid #333;
+            border-radius: 3px;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+        }
+        
+        .jaw-servo::before {
+            content: '';
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            background: #888;
+            border-radius: 50%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            border: 1px solid #555;
+        }
+        
+        /* Skull panels/segments */
+        .skull-panel {
+            position: absolute;
+            border: 1px solid rgba(136, 136, 136, 0.3);
+            border-radius: 5px;
+        }
+        
+        .skull-panel.top {
+            width: 160px;
+            height: 80px;
+            top: 20px;
+            left: 70px;
+            border-bottom: 2px solid rgba(136, 136, 136, 0.4);
+        }
+        
+        /* Cheekbone structure */
+        .cheekbone {
+            position: absolute;
+            width: 40px;
+            height: 30px;
+            background: linear-gradient(135deg, rgba(255,255,255,0.2) 0%, transparent 100%);
+            border-radius: 50%;
+            top: 130px;
+        }
+        
+        .cheekbone.left {
+            left: 50px;
+            transform: rotate(-15deg);
+        }
+        
+        .cheekbone.right {
+            right: 50px;
+            transform: rotate(15deg);
+        }
+        
+        /* Jaw hinge points */
+        .jaw-hinge {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            background: #555;
+            border: 2px solid #333;
+            border-radius: 50%;
+            top: 240px;
+            z-index: 3;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.4);
+        }
+        
+        .jaw-hinge.left {
+            left: 75px;
+        }
+        
+        .jaw-hinge.right {
+            right: 75px;
+        }
+        
+        /* Servo angle indicator */
+        .angle-display {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        
+        /* Opening percentage bar */
+        .opening-bar {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            width: 150px;
+        }
+        
+        .bar-label {
+            color: #666;
+            font-size: 12px;
+            margin-bottom: 5px;
+        }
+        
+        .bar-container {
+            width: 100%;
+            height: 20px;
+            background: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+            border: 2px solid #999;
+        }
+        
+        .bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4caf50 0%, #8bc34a 100%);
+            transition: width 0.1s ease-out;
+            width: 0%;
+        }
+        
+        /* Control panel */
+        .control-panel {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        
+        .control-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .control-btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .control-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        
+        .control-btn:active {
+            transform: translateY(0);
+        }
+        
+        .control-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .btn-start {
+            background: #4caf50;
+            color: white;
+        }
+        
+        .btn-stop {
+            background: #f44336;
+            color: white;
+        }
+        
+        .btn-mute {
+            background: #ff9800;
+            color: white;
+        }
+        
+        .btn-settings {
+            background: #2196f3;
+            color: white;
+        }
+        
+        .settings-panel {
+            margin-top: 15px;
+            padding: 15px;
+            background: white;
+            border-radius: 8px;
+            display: none;
+        }
+        
+        .settings-panel.active {
+            display: block;
+        }
+        
+        .setting-item {
+            margin-bottom: 15px;
+        }
+        
+        .setting-label {
+            display: block;
+            margin-bottom: 5px;
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .setting-input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        .text-display {
+            text-align: center;
+            padding: 20px;
+            background: #e9ecef;
+            border-radius: 10px;
+            min-height: 60px;
+            margin-top: 20px;
+        }
+        
+        .current-text {
+            font-size: 18px;
+            color: #333;
+            font-weight: 500;
+        }
+        
+        .phoneme {
+            font-size: 14px;
+            color: #666;
+            margin-top: 5px;
+            font-family: monospace;
+        }
+        
+        .status {
+            text-align: center;
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .viseme-label {
+            text-align: center;
+            font-size: 16px;
+            color: #666;
+            margin-top: 10px;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Sunny Robot Head Control</h1>
+        <p class="subtitle">Real-time lip sync & servo calibration</p>
+        
+        <div class="mouth-container">
+            <div class="robot-head">
+                <!-- Skull structure -->
+                <div class="head-outline"></div>
+                <div class="skull-detail"></div>
+                <div class="skull-panel top"></div>
+                
+                <!-- Cheekbones -->
+                <div class="cheekbone left"></div>
+                <div class="cheekbone right"></div>
+                
+                <!-- Eye sockets and eyes -->
+                <div class="eye-socket left">
+                    <div class="eye" id="left-eye">
+                        <div class="pupil"></div>
+                    </div>
+                </div>
+                <div class="eye-socket right">
+                    <div class="eye" id="right-eye">
+                        <div class="pupil"></div>
+                    </div>
+                </div>
+                
+                <!-- Nose cavity -->
+                <div class="nose"></div>
+                
+                <!-- Mechanical details -->
+                <div class="mech-detail left"></div>
+                <div class="mech-detail right"></div>
+                
+                <!-- Jaw hinges -->
+                <div class="jaw-hinge left"></div>
+                <div class="jaw-hinge right"></div>
+                
+                <!-- Upper jaw with teeth -->
+                <div class="upper-jaw">
+                    <div class="upper-teeth">
+                        <div class="tooth"></div>
+                        <div class="tooth"></div>
+                        <div class="tooth"></div>
+                        <div class="tooth"></div>
+                        <div class="tooth"></div>
+                        <div class="tooth"></div>
+                        <div class="tooth"></div>
+                        <div class="tooth"></div>
+                    </div>
+                </div>
+                
+                <!-- Lower jaw with teeth (animated) -->
+                <div class="lower-jaw" id="jaw">
+                    <div class="lower-teeth">
+                        <div class="tooth"></div>
+                        <div class="tooth"></div>
+                        <div class="tooth"></div>
+                        <div class="tooth"></div>
+                        <div class="tooth"></div>
+                        <div class="tooth"></div>
+                        <div class="tooth"></div>
+                        <div class="tooth"></div>
+                    </div>
+                    <div class="jaw-servo"></div>
+                </div>
+                
+                <!-- Status displays -->
+                <div class="angle-display" id="angle">90°</div>
+                <div class="opening-bar">
+                    <div class="bar-label">Mouth Opening</div>
+                    <div class="bar-container">
+                        <div class="bar-fill" id="bar"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="viseme-label" id="viseme-label">CLOSED - Rest position</div>
+        
+        <div class="text-display">
+            <div class="current-text" id="current-text">Waiting for speech...</div>
+            <div class="phoneme" id="phoneme"></div>
+        </div>
+        
+        <div class="status disconnected" id="status">
+            ⚠️ Connecting to server...
+        </div>
+        
+        <div class="control-panel">
+            <div class="control-title">🎮 Controls</div>
+            <div class="button-group">
+                <button class="control-btn btn-start" id="btn-start" onclick="startConversation()">
+                    ▶️ Start Listening
+                </button>
+                <button class="control-btn btn-stop" id="btn-stop" onclick="stopConversation()" disabled>
+                    ⏹️ Stop
+                </button>
+                <button class="control-btn btn-mute" id="btn-mute" onclick="toggleMute()">
+                    🔊 Mute
+                </button>
+                <button class="control-btn btn-settings" onclick="toggleSettings()">
+                    ⚙️ Settings
+                </button>
+            </div>
+            
+            <div class="settings-panel" id="settings">
+                <div class="setting-item">
+                    <label class="setting-label">🎤 Microphone</label>
+                    <select class="setting-input" id="microphone-select">
+                        <option value="">Loading devices...</option>
+                    </select>
+                </div>
+                <div class="setting-item">
+                    <label class="setting-label">🔊 Speaker</label>
+                    <select class="setting-input" id="speaker-select">
+                        <option value="">Loading devices...</option>
+                    </select>
+                </div>
+                <div class="setting-item">
+                    <label class="setting-label">🗣️ Voice</label>
+                    <select class="setting-input" id="voice-select">
+                        <option value="matthew" selected>Matthew (Masculine, US English)</option>
+                        <option value="tiffany">Tiffany (Feminine, US English)</option>
+                        <option value="amy">Amy (Feminine, British English)</option>
+                        <option value="ambre">Ambre (Feminine, French)</option>
+                        <option value="florian">Florian (Masculine, French)</option>
+                        <option value="beatrice">Beatrice (Feminine, Italian)</option>
+                        <option value="lorenzo">Lorenzo (Masculine, Italian)</option>
+                        <option value="greta">Greta (Feminine, German)</option>
+                        <option value="lennart">Lennart (Masculine, German)</option>
+                        <option value="lupe">Lupe (Feminine, Spanish)</option>
+                        <option value="carlos">Carlos (Masculine, Spanish)</option>
+                    </select>
+                </div>
+                <div class="setting-item">
+                    <label class="setting-label">Jaw Closed Angle (degrees)</label>
+                    <input type="number" class="setting-input" id="closed-angle" value="90" min="0" max="180">
+                </div>
+                <div class="setting-item">
+                    <label class="setting-label">Jaw Max Open Angle (degrees)</label>
+                    <input type="number" class="setting-input" id="max-angle" value="130" min="0" max="180">
+                </div>
+                <div class="setting-item">
+                    <label class="setting-label">Speech Speed (characters/second)</label>
+                    <input type="range" class="setting-input" id="speech-speed" value="18" min="10" max="35" step="1">
+                    <span id="speech-speed-value">18</span>
+                </div>
+                
+                <div class="setting-item" style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #ddd;">
+                    <h3 style="margin-bottom: 15px;">🦴 Jaw Servo (Channel 8 - MG996R Standard)</h3>
+                    <small style="color: #666; font-size: 12px; display: block; margin-bottom: 10px;">
+                        ✅ Standard 180° servo - angles control exact jaw position
+                    </small>
+                </div>
+                
+                <div class="setting-item">
+                    <label class="setting-label">Closed Jaw Angle (degrees)</label>
+                    <input type="number" class="setting-input" id="jaw-close-angle" value="0" min="0" max="180" step="1">
+                    <small style="color: #999; font-size: 11px;">Angle when jaw is fully closed (typically 0-80°)</small>
+                </div>
+                
+                <div class="setting-item">
+                    <label class="setting-label">Open Jaw Angle (degrees)</label>
+                    <input type="number" class="setting-input" id="jaw-open-angle" value="120" min="0" max="180" step="1">
+                    <small style="color: #999; font-size: 11px;">Angle when jaw is fully open (typically 100-140°)</small>
+                </div>
+                
+
+                
+                <div class="setting-item">
+                    <button class="control-btn btn-settings" onclick="testJaw()">
+                        🧪 Test Jaw (Close → Open → Close)
+                    </button>
+                </div>
+                
+                <div class="setting-item" style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #ddd;">
+                    <h3 style="margin-bottom: 15px;">👁️ Face Tracking</h3>
+                    <small style="color: #666; font-size: 12px; display: block; margin-bottom: 10px;">
+                        Automatic face detection and eye tracking using camera
+                    </small>
+                </div>
+                
+                <div class="setting-item">
+                    <label class="setting-label">
+                        <input type="checkbox" id="face-tracking-enabled" style="margin-right: 10px;">
+                        Enable Face Tracking
+                        <span id="face-tracking-status" style="margin-left: 10px; font-size: 12px; color: #999;">⚪ Inactive</span>
+                    </label>
+                    <small style="color: #999; font-size: 11px;">Automatically track faces with eye servos and camera</small>
+                    <button class="control-btn btn-settings" onclick="testFaceTracking()" style="margin-top: 10px;">
+                        🧪 Test Connection
+                    </button>
+                </div>
+                
+                <div class="setting-item">
+                    <label class="setting-label">Servo Configuration</label>
+                    <select class="setting-input" id="servo-config">
+                        <option value="inmoov">InMoov (8 servos - 4 per eye)</option>
+                        <option value="original">Original (6 servos - shared X/Y)</option>
+                        <option value="simple">Simple (2 servos - X/Y only)</option>
+                    </select>
+                    <small style="color: #999; font-size: 11px;">Select your robot's eye servo configuration</small>
+                </div>
+                
+                <div class="setting-item">
+                    <label class="setting-label">Camera Device</label>
+                    <select class="setting-input" id="camera-index">
+                        <option value="0">Camera 0 (Built-in / Default)</option>
+                        <option value="1">Camera 1 (External USB)</option>
+                        <option value="2">Camera 2</option>
+                        <option value="3">Camera 3</option>
+                    </select>
+                    <small style="color: #999; font-size: 11px;">Select your camera device</small>
+                </div>
+                
+                <div class="setting-item" style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #ddd;">
+                    <h3 style="margin-bottom: 15px;">👁️ Virtual Eye Blink Test</h3>
+                    <button class="control-btn btn-settings" onclick="testBlink()" style="width: 100%;">
+                        👁️ Test Blink Animation
+                    </button>
+                    <small style="color: #999; font-size: 11px; display: block; margin-top: 5px;">Click to manually trigger a blink</small>
+                </div>
+                
+                <div class="setting-item" style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #ddd;">
+                    <h3 style="margin-bottom: 15px;">👁️ Eye & Eyelid Servos (Channels 0-7)</h3>
+                    <small style="color: #666; font-size: 12px; display: block; margin-bottom: 10px;">
+                        ✅ Standard 180° servos - angles control exact position (0° to 180°)
+                    </small>
+                </div>
+                
+                <div class="setting-item">
+                    <label class="setting-label">Select Servo (Standard 180°)</label>
+                    <select class="setting-input" id="eye-servo-select">
+                        <option value="0">Channel 0 - Left Eye X-axis</option>
+                        <option value="1">Channel 1 - Left Eye Y-axis</option>
+                        <option value="2">Channel 2 - Left Upper Eyelid</option>
+                        <option value="3">Channel 3 - Left Lower Eyelid</option>
+                        <option value="4">Channel 4 - Right Eye X-axis</option>
+                        <option value="5">Channel 5 - Right Eye Y-axis</option>
+                        <option value="6">Channel 6 - Right Upper Eyelid</option>
+                        <option value="7">Channel 7 - Right Lower Eyelid</option>
+                    </select>
+                    <small style="color: #999; font-size: 12px; display: block; margin-top: 5px;">
+                        💡 Channel 8 (Jaw) is 360° continuous - configured separately above
+                    </small>
+                </div>
+                
+                <div class="setting-item">
+                    <label class="setting-label">Test Angle (0-180°)</label>
+                    <input type="range" class="setting-input" id="eye-test-angle" value="90" min="0" max="180" step="1">
+                    <span id="eye-test-angle-value">90°</span>
+                </div>
+                
+                <div class="setting-item">
+                    <button class="control-btn btn-settings" onclick="testEyeServo()" style="width: 48%; display: inline-block;">
+                        🧪 Test Servo
+                    </button>
+                    <button class="control-btn btn-settings" onclick="centerAllEyes()" style="width: 48%; display: inline-block;">
+                        🎯 Center All
+                    </button>
+                </div>
+                
+                <div class="setting-item" style="margin-top: 15px;">
+                    <label class="setting-label">Min Angle (Left/Down limit)</label>
+                    <input type="number" class="setting-input" id="eye-min-angle" value="0" min="0" max="180" step="1">
+                    <small style="color: #999; font-size: 11px;">Valid range: 0-180°</small>
+                </div>
+                
+                <div class="setting-item">
+                    <label class="setting-label">Max Angle (Right/Up limit)</label>
+                    <input type="number" class="setting-input" id="eye-max-angle" value="180" min="0" max="180" step="1">
+                    <small style="color: #999; font-size: 11px;">Valid range: 0-180°</small>
+                </div>
+                
+                <div class="setting-item">
+                    <label class="setting-label">Center Angle (Neutral position)</label>
+                    <input type="number" class="setting-input" id="eye-center-angle" value="90" min="0" max="180" step="1">
+                    <small style="color: #999; font-size: 11px;">Valid range: 0-180°</small>
+                </div>
+                
+                <div class="setting-item">
+                    <button class="control-btn btn-settings" onclick="saveEyeServoConfig()" style="width: 48%; display: inline-block;">
+                        💾 Save Config
+                    </button>
+                    <button class="control-btn btn-settings" onclick="loadEyeServoConfig()" style="width: 48%; display: inline-block;">
+                        📂 Load Config
+                    </button>
+                </div>
+                
+                <div class="setting-item" style="margin-top: 15px;">
+                    <label class="setting-label">Quick Position Tests</label>
+                    <div style="display: flex; gap: 5px;">
+                        <button class="control-btn btn-settings" onclick="testEyePosition('min')" style="flex: 1;">
+                            ⬅️ Min
+                        </button>
+                        <button class="control-btn btn-settings" onclick="testEyePosition('center')" style="flex: 1;">
+                            🎯 Center
+                        </button>
+                        <button class="control-btn btn-settings" onclick="testEyePosition('max')" style="flex: 1;">
+                            ➡️ Max
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="setting-item">
+                    <button class="control-btn btn-settings" onclick="sweepEyeServo()" style="width: 100%;">
+                        🔄 Sweep Test (Min → Max → Center)
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        
+        const jawElement = document.getElementById('jaw');
+        const angleElement = document.getElementById('angle');
+        const barElement = document.getElementById('bar');
+        const textElement = document.getElementById('current-text');
+        const phonemeElement = document.getElementById('phoneme');
+        const statusElement = document.getElementById('status');
+        const visemeLabelElement = document.getElementById('viseme-label');
+        
+        // Viseme to servo angle mapping (matches jaw_controller.py)
+        const visemeToAngle = {
+            'CLOSED': 90,
+            'NARROW': 96,
+            'ROUNDED': 98,
+            'MEDIUM': 102,
+            'MEDIUM_OPEN': 108,
+            'WIDE': 116
+        };
+        
+        // Viseme to opening percentage
+        const visemeToPercent = {
+            'CLOSED': 0,
+            'NARROW': 15,
+            'ROUNDED': 20,
+            'MEDIUM': 30,
+            'MEDIUM_OPEN': 45,
+            'WIDE': 65
+        };
+        
+        // Viseme descriptions
+        const visemeDescriptions = {
+            'CLOSED': 'CLOSED - Mouth closed (0% open)',
+            'NARROW': 'NARROW - Barely open (15%)',
+            'MEDIUM': 'MEDIUM - Slightly open (30%)',
+            'MEDIUM_OPEN': 'MEDIUM OPEN - Half open (45%)',
+            'WIDE': 'WIDE - Fully open (65%)',
+            'ROUNDED': 'ROUNDED - O shape (20%)'
+        };
+        
+        function updateJaw(viseme) {
+            const angle = visemeToAngle[viseme] || 90;
+            const percent = visemeToPercent[viseme] || 0;
+            
+            // Calculate jaw vertical movement (0 = closed, max = open)
+            // Move jaw straight down - no rotation
+            const maxMovement = 100; // Maximum pixels to move down
+            const movement = (percent / 100) * maxMovement;
+            
+            // Apply ONLY vertical translation (no rotation, no horizontal)
+            jawElement.style.transform = `translate(0px, ${movement}px)`;
+            
+            // Update angle display
+            angleElement.textContent = `${angle}°`;
+            
+            // Update opening bar
+            barElement.style.width = `${percent}%`;
+        }
+        
+        socket.on('connect', () => {
+            statusElement.className = 'status connected';
+            statusElement.textContent = '✅ Connected to voice assistant';
+        });
+        
+        socket.on('disconnect', () => {
+            statusElement.className = 'status disconnected';
+            statusElement.textContent = '⚠️ Disconnected from server';
+        });
+        
+        socket.on('viseme_update', (data) => {
+            const viseme = data.viseme || 'CLOSED';
+            const text = data.text || '';
+            
+            // Update jaw animation
+            updateJaw(viseme);
+            
+            // Update viseme label
+            visemeLabelElement.textContent = visemeDescriptions[viseme] || viseme;
+            
+            // Update text display
+            if (text) {
+                // Extract phoneme if present
+                const match = text.match(/\[(.*?)\]/);
+                if (match) {
+                    const phoneme = match[1];
+                    const cleanText = text.replace(/\[.*?\]/, '').trim();
+                    textElement.textContent = cleanText || 'Speaking...';
+                    phonemeElement.textContent = `Phoneme: ${phoneme}`;
+                } else {
+                    textElement.textContent = text;
+                    phonemeElement.textContent = '';
+                }
+            } else {
+                textElement.textContent = 'Waiting for speech...';
+                phonemeElement.textContent = '';
+            }
+        });
+        
+        // Store current eye positions
+        let leftEyePos = { x: 0, y: 0 };
+        let rightEyePos = { x: 0, y: 0 };
+        
+        // Eye tracking update
+        socket.on('eye_position_update', (data) => {
+            const leftEye = document.getElementById('left-eye');
+            const rightEye = document.getElementById('right-eye');
+            
+            if (data.left_x !== undefined && data.left_y !== undefined) {
+                // Map servo angles to eye position
+                // Assuming angles are 0-180, map to -20px to +20px movement
+                leftEyePos.x = ((data.left_x - 90) / 90) * 20;
+                leftEyePos.y = ((data.left_y - 90) / 90) * 20;
+                if (!leftEye.classList.contains('blinking')) {
+                    leftEye.style.transform = `translate(calc(-50% + ${leftEyePos.x}px), calc(-50% + ${leftEyePos.y}px))`;
+                }
+            }
+            
+            if (data.right_x !== undefined && data.right_y !== undefined) {
+                rightEyePos.x = ((data.right_x - 90) / 90) * 20;
+                rightEyePos.y = ((data.right_y - 90) / 90) * 20;
+                if (!rightEye.classList.contains('blinking')) {
+                    rightEye.style.transform = `translate(calc(-50% + ${rightEyePos.x}px), calc(-50% + ${rightEyePos.y}px))`;
+                }
+            }
+        });
+        
+        // Eye blinking
+        socket.on('blink_eyes', () => {
+            const leftEye = document.getElementById('left-eye');
+            const rightEye = document.getElementById('right-eye');
+            
+            if (!leftEye || !rightEye) return;
+            
+            // Add blinking class (CSS handles the animation)
+            leftEye.classList.add('blinking');
+            rightEye.classList.add('blinking');
+            
+            // Remove after 120ms and restore position
+            setTimeout(() => {
+                leftEye.classList.remove('blinking');
+                rightEye.classList.remove('blinking');
+                // Restore eye positions
+                leftEye.style.transform = `translate(calc(-50% + ${leftEyePos.x}px), calc(-50% + ${leftEyePos.y}px))`;
+                rightEye.style.transform = `translate(calc(-50% + ${rightEyePos.x}px), calc(-50% + ${rightEyePos.y}px))`;
+            }, 120);
+        });
+        
+        // Initialize jaw to closed position
+        updateJaw('CLOSED');
+        
+        // Load available devices
+        async function loadDevices() {
+            try {
+                const response = await fetch('/api/devices');
+                const devices = await response.json();
+                
+                // Populate microphone dropdown
+                const micSelect = document.getElementById('microphone-select');
+                micSelect.innerHTML = '';
+                devices.microphones.forEach((mic, idx) => {
+                    const option = document.createElement('option');
+                    option.value = mic.index;
+                    option.textContent = mic.name;
+                    if (idx === 0) option.selected = true;
+                    micSelect.appendChild(option);
+                });
+                
+                // Populate speaker dropdown
+                const speakerSelect = document.getElementById('speaker-select');
+                speakerSelect.innerHTML = '';
+                devices.speakers.forEach((speaker, idx) => {
+                    const option = document.createElement('option');
+                    option.value = speaker.index;
+                    option.textContent = speaker.name;
+                    if (idx === 0) option.selected = true;
+                    speakerSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading devices:', error);
+            }
+        }
+        
+        // Load devices on page load
+        loadDevices();
+        
+        // Control functions
+        let isMuted = false;
+        let isListening = false;
+        
+        function startConversation() {
+            socket.emit('control', {action: 'start'});
+            document.getElementById('btn-start').disabled = true;
+            document.getElementById('btn-stop').disabled = false;
+            isListening = true;
+            statusElement.className = 'status connected';
+            statusElement.textContent = '🎤 Listening...';
+        }
+        
+        function stopConversation() {
+            socket.emit('control', {action: 'stop'});
+            document.getElementById('btn-start').disabled = false;
+            document.getElementById('btn-stop').disabled = true;
+            isListening = false;
+            updateJaw('CLOSED');
+            statusElement.className = 'status connected';
+            statusElement.textContent = '✅ Connected (stopped)';
+        }
+        
+        function toggleMute() {
+            isMuted = !isMuted;
+            socket.emit('control', {action: 'mute', value: isMuted});
+            const btn = document.getElementById('btn-mute');
+            btn.textContent = isMuted ? '🔇 Unmute' : '🔊 Mute';
+        }
+        
+        function toggleSettings() {
+            const settings = document.getElementById('settings');
+            settings.classList.toggle('active');
+        }
+        
+        // Send settings updates
+        document.getElementById('microphone-select').addEventListener('change', (e) => {
+            socket.emit('control', {action: 'set_microphone', value: parseInt(e.target.value)});
+        });
+        
+        document.getElementById('speaker-select').addEventListener('change', (e) => {
+            socket.emit('control', {action: 'set_speaker', value: parseInt(e.target.value)});
+        });
+        
+        document.getElementById('voice-select').addEventListener('change', (e) => {
+            socket.emit('control', {action: 'set_voice', value: e.target.value});
+        });
+        
+        document.getElementById('closed-angle').addEventListener('change', (e) => {
+            socket.emit('control', {action: 'set_closed_angle', value: parseInt(e.target.value)});
+        });
+        
+        document.getElementById('max-angle').addEventListener('change', (e) => {
+            socket.emit('control', {action: 'set_max_angle', value: parseInt(e.target.value)});
+        });
+        
+        document.getElementById('speech-speed').addEventListener('input', (e) => {
+            const value = parseInt(e.target.value);
+            document.getElementById('speech-speed-value').textContent = value;
+            socket.emit('control', {action: 'set_speech_speed', value: value});
+        });
+        
+        // Helper function to clamp angle values
+        function clampAngle(value, min = 0, max = 180) {
+            return Math.max(min, Math.min(max, value));
+        }
+        
+        const jawStopAngle = document.getElementById('jaw-stop-angle');
+        if (jawStopAngle) {
+            jawStopAngle.addEventListener('change', (e) => {
+                const value = clampAngle(parseInt(e.target.value));
+                e.target.value = value;
+                socket.emit('control', {action: 'set_jaw_stop_angle', value: value});
+            });
+        }
+        
+        const jawOpenAngle = document.getElementById('jaw-open-angle');
+        if (jawOpenAngle) {
+            jawOpenAngle.addEventListener('change', (e) => {
+                const value = clampAngle(parseInt(e.target.value));
+                e.target.value = value;
+                socket.emit('control', {action: 'set_jaw_open_angle', value: value});
+            });
+        }
+        
+        const jawCloseAngle = document.getElementById('jaw-close-angle');
+        if (jawCloseAngle) {
+            jawCloseAngle.addEventListener('change', (e) => {
+                const value = clampAngle(parseInt(e.target.value));
+                e.target.value = value;
+                socket.emit('control', {action: 'set_jaw_close_angle', value: value});
+            });
+        }
+        
+        // Face tracking controls
+        const faceTrackingCheckbox = document.getElementById('face-tracking-enabled');
+        if (faceTrackingCheckbox) {
+            console.log('✅ Face tracking checkbox found');
+            faceTrackingCheckbox.addEventListener('change', (e) => {
+                console.log('Face tracking checkbox changed:', e.target.checked);
+                const statusElement = document.getElementById('face-tracking-status');
+                if (e.target.checked) {
+                    statusElement.textContent = '🟡 Starting...';
+                    statusElement.style.color = '#f39c12';
+                }
+                console.log('Emitting toggle_face_tracking:', e.target.checked);
+                socket.emit('control', {action: 'toggle_face_tracking', value: e.target.checked});
+            });
+        } else {
+            console.error('❌ Face tracking checkbox NOT found!');
+        }
+        
+        // Listen for face tracking status updates
+        socket.on('face_tracking_status', (data) => {
+            console.log('Received face_tracking_status:', data);
+            const statusElement = document.getElementById('face-tracking-status');
+            const checkbox = document.getElementById('face-tracking-enabled');
+            
+            if (data.enabled) {
+                statusElement.textContent = '🟢 Active';
+                statusElement.style.color = '#27ae60';
+                checkbox.checked = true;
+            } else {
+                statusElement.textContent = '⚪ Inactive';
+                statusElement.style.color = '#999';
+                checkbox.checked = false;
+            }
+        });
+        
+        function testFaceTracking() {
+            console.log('Testing face tracking connection...');
+            console.log('Socket connected:', socket.connected);
+            alert('Check browser console (F12) for connection status');
+        }
+        
+        document.getElementById('servo-config').addEventListener('change', (e) => {
+            socket.emit('control', {action: 'set_servo_config', value: e.target.value});
+        });
+        
+        document.getElementById('camera-index').addEventListener('change', (e) => {
+            socket.emit('control', {action: 'set_camera_index', value: parseInt(e.target.value)});
+        });
+        
+        function testJaw() {
+            socket.emit('control', {action: 'test_jaw'});
+        }
+        
+        document.getElementById('eye-test-angle').addEventListener('input', (e) => {
+            const value = parseInt(e.target.value);
+            document.getElementById('eye-test-angle-value').textContent = value + '°';
+        });
+        
+        function testEyeServo() {
+            const channel = parseInt(document.getElementById('eye-servo-select').value);
+            const angle = parseInt(document.getElementById('eye-test-angle').value);
+            socket.emit('control', {action: 'test_eye_servo', channel: channel, angle: angle});
+        }
+        
+        function centerAllEyes() {
+            socket.emit('control', {action: 'center_all_eyes'});
+        }
+        
+        function saveEyeServoConfig() {
+            const channel = parseInt(document.getElementById('eye-servo-select').value);
+            const minAngle = clampAngle(parseInt(document.getElementById('eye-min-angle').value));
+            const maxAngle = clampAngle(parseInt(document.getElementById('eye-max-angle').value));
+            const centerAngle = clampAngle(parseInt(document.getElementById('eye-center-angle').value));
+            
+            // Update displayed values
+            document.getElementById('eye-min-angle').value = minAngle;
+            document.getElementById('eye-max-angle').value = maxAngle;
+            document.getElementById('eye-center-angle').value = centerAngle;
+            
+            socket.emit('control', {
+                action: 'save_eye_config',
+                channel: channel,
+                min_angle: minAngle,
+                max_angle: maxAngle,
+                center_angle: centerAngle
+            });
+            
+            alert(`✅ Saved config for Eye Servo ${channel}\nMin: ${minAngle}° | Max: ${maxAngle}° | Center: ${centerAngle}°`);
+        }
+        
+        function loadEyeServoConfig() {
+            const channel = parseInt(document.getElementById('eye-servo-select').value);
+            socket.emit('control', {action: 'load_eye_config', channel: channel});
+        }
+        
+        // Listen for loaded eye config
+        socket.on('eye_config_loaded', (data) => {
+            document.getElementById('eye-min-angle').value = data.min_angle;
+            document.getElementById('eye-max-angle').value = data.max_angle;
+            document.getElementById('eye-center-angle').value = data.center_angle;
+        });
+        
+        // Load config when servo selection changes
+        document.getElementById('eye-servo-select').addEventListener('change', () => {
+            loadEyeServoConfig();
+        });
+        
+        function testEyePosition(position) {
+            const channel = parseInt(document.getElementById('eye-servo-select').value);
+            let angle;
+            
+            if (position === 'min') {
+                angle = parseInt(document.getElementById('eye-min-angle').value);
+            } else if (position === 'center') {
+                angle = parseInt(document.getElementById('eye-center-angle').value);
+            } else if (position === 'max') {
+                angle = parseInt(document.getElementById('eye-max-angle').value);
+            }
+            
+            socket.emit('control', {action: 'test_eye_servo', channel: channel, angle: angle});
+            document.getElementById('eye-test-angle').value = angle;
+            document.getElementById('eye-test-angle-value').textContent = angle + '°';
+        }
+        
+        function sweepEyeServo() {
+            const channel = parseInt(document.getElementById('eye-servo-select').value);
+            const minAngle = parseInt(document.getElementById('eye-min-angle').value);
+            const maxAngle = parseInt(document.getElementById('eye-max-angle').value);
+            const centerAngle = parseInt(document.getElementById('eye-center-angle').value);
+            
+            socket.emit('control', {
+                action: 'sweep_eye_servo',
+                channel: channel,
+                min_angle: minAngle,
+                max_angle: maxAngle,
+                center_angle: centerAngle
+            });
+        }
+        
+        function testBlink() {
+            const leftEye = document.getElementById('left-eye');
+            const rightEye = document.getElementById('right-eye');
+            
+            leftEye.classList.add('blinking');
+            rightEye.classList.add('blinking');
+            
+            setTimeout(() => {
+                leftEye.classList.remove('blinking');
+                rightEye.classList.remove('blinking');
+            }, 120);
+        }
+    </script>
+</body>
+</html>

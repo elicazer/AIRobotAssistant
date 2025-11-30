@@ -1,0 +1,20 @@
+{
+  "voice_id": "matthew",
+  "microphone_index": null,
+  "speaker_index": null,
+  "speech_speed": 17,
+  "jaw_stop_angle": 90,
+  "jaw_open_angle": 100,
+  "jaw_close_angle": 0,
+  "jaw_pulse_duration": 0.08,
+  "face_tracking_enabled": true,
+  "servo_config": "inmoov",
+  "camera_index": 0,
+  "eye_servos": {
+    "0": {
+      "min_angle": 0,
+      "max_angle": 180,
+      "center_angle": 90
+    }
+  }
+}
