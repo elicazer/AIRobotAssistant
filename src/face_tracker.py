@@ -27,6 +27,7 @@ class FaceTracker:
         self.last_face_position = None
         self.face_lost_time = None
         self.face_lost_threshold = 2.0  # seconds before considering face truly lost
+        self._latest_frame = None  # Thread-safe latest frame for enrollment
         
     def start_camera(self, camera_index=0) -> bool:
         """Start camera capture"""
@@ -113,6 +114,7 @@ class FaceTracker:
         if not ret:
             return None
         
+        self._latest_frame = frame
         return frame
     
     def track_face(self) -> Optional[Dict]:

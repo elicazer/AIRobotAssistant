@@ -79,26 +79,11 @@ The system works perfectly without physical hardware using the web-based virtual
 
 ## 📦 Installation
 
-### Prerequisites
-
-- **AWS Account**: Required for Amazon Nova Sonic and Amazon Bedrock access
-- **AWS Credentials**: Configure your AWS credentials with access to:
-  - Amazon Bedrock
-  - Amazon Nova Sonic
-  
-```bash
-# Configure AWS credentials (if not already set up)
-aws configure
-```
-
 ### Dependencies
 ```bash
 # Clone repository
 git clone <repository-url>
 cd AIRobotAssistant
-
-# macOS: Install PortAudio (required for pyaudio)
-brew install portaudio
 
 # Create virtual environment (Python 3.12+ required)
 python3.12 -m venv venv
@@ -107,6 +92,45 @@ source venv/bin/activate  # On Mac/Linux
 # Install dependencies
 pip install -r requirements.txt
 ```
+
+### Face Recognition & Emotion Detection (DeepFace)
+
+Face **tracking** (eyes following you) works with just OpenCV. Face
+**recognition** (greeting you by name) and **emotion detection** additionally
+require DeepFace, which pulls in TensorFlow. These are included in
+`requirements.txt`, but if you did a lightweight install without them (or you
+see `No module named 'deepface'` in the logs), install them explicitly:
+
+```bash
+source venv/bin/activate
+pip install deepface tf-keras
+```
+
+Notes:
+- `tf-keras` is required alongside TensorFlow 2.16+ (DeepFace relies on the
+  legacy Keras API).
+- On first use, DeepFace downloads its model weights (Facenet for recognition,
+  a small expression model for emotion) to `~/.deepface/weights/`. This happens
+  once and needs an internet connection.
+- Enrolled faces are stored in `config/face_database.json`.
+
+#### Emotion model backend (HSEmotion vs DeepFace)
+
+Emotion detection defaults to **HSEmotion** (`hsemotion-onnx`), an AffectNet
+model that is far more accurate on real webcam faces than DeepFace's legacy FER
+model (which tends to misread neutral faces as sad/fear). It's installed by
+`requirements.txt` and downloads a small ONNX model to `~/.hsemotion/` on first
+use. Switch backends with the `emotion_backend` setting (`hsemotion` or
+`deepface`). Related tuning settings (in `config/voice_assistant_settings.json`):
+
+- `emotion_backend`: `"hsemotion"` (default) or `"deepface"`.
+- `emotion_min_confidence`: drop non-neutral emotions below this probability.
+- `emotion_neutral_bias`: the top emotion must beat the model's neutral score
+  by this margin, else neutral.
+- `emotion_smoothing_window`: majority-vote over this many recent frames to
+  avoid flicker.
+
+Face recognition (identity) always uses DeepFace regardless of this setting.
 
 ## 🚀 Usage
 
@@ -208,9 +232,12 @@ servo_angle = map_value(face_position, 0, video_dimension, servo_max, servo_min)
 - Adjust `jaw_servo_min_change` if servo is jittery
 
 ### Camera Issues
-- Check camera permissions
+- Check camera permissions (on macOS, grant camera access to your terminal/IDE)
 - Try different `camera_index` values (0, 1, 2)
 - Verify camera works with other applications
+- `module 'cv2' has no attribute 'CascadeClassifier'`: you have the
+  `opencv-python` 5.x pre-release, which dropped the classic face-detection API.
+  Install a 4.x build: `pip install "opencv-python>=4.8,<5"`
 
 ### Audio Issues
 - Check microphone/speaker in system settings

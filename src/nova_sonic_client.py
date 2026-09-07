@@ -40,11 +40,12 @@ class NovaSonicClient:
         on_user_text: Called when user speech is transcribed
         on_assistant_text: Called when assistant response text is available
         on_audio_output: Called when audio chunk is ready for playback
+        on_tool_use: Called when Nova Sonic invokes a tool (async callable)
     """
     
     def __init__(
         self,
-        model_id: str = 'amazon.nova-sonic-v1:0',
+        model_id: str = 'amazon.nova-2-sonic-v1:0',
         region: str = 'us-east-1',
         voice_id: str = 'matthew',
         system_prompt: Optional[str] = None,
@@ -74,6 +75,11 @@ class NovaSonicClient:
         self.role = None
         self.display_assistant_text = False
         
+        # Tool use state tracking
+        self._current_tool_use_id: Optional[str] = None
+        self._current_tool_name: Optional[str] = None
+        self._current_tool_content: str = ""
+        
         # System prompt
         self.system_prompt = system_prompt or (
             "You are a friendly robot assistant. Keep your responses short and natural, "
@@ -85,6 +91,7 @@ class NovaSonicClient:
         self.on_assistant_text: Optional[Callable[[str], None]] = None
         self.on_audio_output: Optional[Callable[[bytes], None]] = None
         self.on_audio_chunk: Optional[Callable[[bytes], None]] = None  # Real-time audio processing
+        self.on_tool_use: Optional[Callable] = None  # async (tool_name, tool_use_id, parameters) -> dict
         
         # Thread pool for non-blocking callbacks
         self.callback_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="audio_callback")
@@ -132,8 +139,14 @@ class NovaSonicClient:
         )
         await self.stream.input_stream.send(event)
     
-    async def start_session(self):
-        """Start a new session with Nova Sonic"""
+    async def start_session(self, tool_config: Optional[str] = None):
+        """Start a new session with Nova Sonic
+        
+        Args:
+            tool_config: Optional JSON string containing tool configuration
+                (from ToolHandler.get_tool_config_json()). When provided, the
+                toolUse section is included in the promptStart event.
+        """
         if not self.client:
             self._initialize_client()
         
@@ -163,29 +176,37 @@ class NovaSonicClient:
         '''
         await self.send_event(session_start)
         
-        # Send prompt start event
-        prompt_start = f'''
-        {{
-          "event": {{
-            "promptStart": {{
-              "promptName": "{self.prompt_name}",
-              "textOutputConfiguration": {{
-                "mediaType": "text/plain"
-              }},
-              "audioOutputConfiguration": {{
-                "mediaType": "audio/lpcm",
-                "sampleRateHertz": {OUTPUT_SAMPLE_RATE},
-                "sampleSizeBits": 16,
-                "channelCount": 1,
-                "voiceId": "{self.voice_id}",
-                "encoding": "base64",
-                "audioType": "SPEECH"
-              }}
-            }}
-          }}
-        }}
-        '''
-        await self.send_event(prompt_start)
+        # Build prompt start event, optionally including tool configuration
+        prompt_start_payload = {
+            "event": {
+                "promptStart": {
+                    "promptName": self.prompt_name,
+                    "textOutputConfiguration": {
+                        "mediaType": "text/plain"
+                    },
+                    "audioOutputConfiguration": {
+                        "mediaType": "audio/lpcm",
+                        "sampleRateHertz": OUTPUT_SAMPLE_RATE,
+                        "sampleSizeBits": 16,
+                        "channelCount": 1,
+                        "voiceId": self.voice_id,
+                        "encoding": "base64",
+                        "audioType": "SPEECH"
+                    }
+                }
+            }
+        }
+        
+        # Include toolUse section if tool_config is provided
+        if tool_config:
+            try:
+                tool_config_data = json.loads(tool_config)
+                if "toolUse" in tool_config_data:
+                    prompt_start_payload["event"]["promptStart"]["toolUse"] = tool_config_data["toolUse"]
+            except (json.JSONDecodeError, KeyError) as e:
+                print(f"Warning: Failed to parse tool_config: {e}")
+        
+        await self.send_event(json.dumps(prompt_start_payload))
         
         # Send system prompt
         text_content_start = f'''
@@ -294,6 +315,112 @@ class NovaSonicClient:
         '''
         await self.send_event(audio_content_end)
     
+    async def send_tool_result(self, tool_use_id: str, result: dict):
+        """Send a tool result back to the Nova Sonic stream.
+        
+        Args:
+            tool_use_id: The tool use ID from the toolUse event.
+            result: The result dictionary from tool execution.
+        """
+        if not self.is_active:
+            return
+        
+        tool_result_content_name = str(uuid.uuid4())
+        
+        # Send contentStart for tool result
+        content_start_payload = {
+            "event": {
+                "contentStart": {
+                    "promptName": self.prompt_name,
+                    "contentName": tool_result_content_name,
+                    "type": "TOOL_RESULT",
+                    "interactive": False,
+                    "toolResultInputConfiguration": {
+                        "toolUseId": tool_use_id
+                    }
+                }
+            }
+        }
+        await self.send_event(json.dumps(content_start_payload))
+        
+        # Send toolResult event with the result content
+        result_content = json.dumps(result)
+        tool_result_payload = {
+            "event": {
+                "toolResult": {
+                    "promptName": self.prompt_name,
+                    "contentName": tool_result_content_name,
+                    "content": result_content
+                }
+            }
+        }
+        await self.send_event(json.dumps(tool_result_payload))
+        
+        # Send contentEnd for tool result
+        content_end_payload = {
+            "event": {
+                "contentEnd": {
+                    "promptName": self.prompt_name,
+                    "contentName": tool_result_content_name
+                }
+            }
+        }
+        await self.send_event(json.dumps(content_end_payload))
+    
+    async def send_text_input(self, text: str):
+        """Inject a text input into the active session mid-stream.
+        
+        Used for injecting greeting prompts or other text-based inputs
+        while the session is active.
+        
+        Args:
+            text: The text content to inject (e.g., a greeting prompt).
+        """
+        if not self.is_active:
+            return
+        
+        text_content_name = str(uuid.uuid4())
+        
+        # Send contentStart for text input
+        content_start_payload = {
+            "event": {
+                "contentStart": {
+                    "promptName": self.prompt_name,
+                    "contentName": text_content_name,
+                    "type": "TEXT",
+                    "interactive": False,
+                    "role": "USER",
+                    "textInputConfiguration": {
+                        "mediaType": "text/plain"
+                    }
+                }
+            }
+        }
+        await self.send_event(json.dumps(content_start_payload))
+        
+        # Send textInput event
+        text_input_payload = {
+            "event": {
+                "textInput": {
+                    "promptName": self.prompt_name,
+                    "contentName": text_content_name,
+                    "content": text
+                }
+            }
+        }
+        await self.send_event(json.dumps(text_input_payload))
+        
+        # Send contentEnd
+        content_end_payload = {
+            "event": {
+                "contentEnd": {
+                    "promptName": self.prompt_name,
+                    "contentName": text_content_name
+                }
+            }
+        }
+        await self.send_event(json.dumps(content_end_payload))
+    
     async def end_session(self):
         """End the session"""
         if not self.is_active:
@@ -345,15 +472,62 @@ class NovaSonicClient:
                         # Handle content start event
                         if 'contentStart' in json_data['event']:
                             content_start = json_data['event']['contentStart']
-                            self.role = content_start['role']
+                            self.role = content_start.get('role')
+                            
+                            # Check for tool use content start
+                            if content_start.get('type') == 'TOOL':
+                                self._current_tool_use_id = content_start.get('toolUseId')
+                                self._current_tool_name = None
+                                self._current_tool_content = ""
                             
                             # Check for speculative content
-                            if 'additionalModelFields' in content_start:
+                            elif 'additionalModelFields' in content_start:
                                 additional_fields = json.loads(content_start['additionalModelFields'])
                                 if additional_fields.get('generationStage') == 'SPECULATIVE':
                                     self.display_assistant_text = True
                                 else:
                                     self.display_assistant_text = False
+                        
+                        # Handle toolUse event
+                        elif 'toolUse' in json_data['event']:
+                            tool_use_data = json_data['event']['toolUse']
+                            tool_name = tool_use_data.get('toolName', '')
+                            tool_content = tool_use_data.get('content', '{}')
+                            
+                            self._current_tool_name = tool_name
+                            self._current_tool_content = tool_content
+                            
+                            # Parse parameters from content
+                            try:
+                                parameters = json.loads(tool_content) if isinstance(tool_content, str) else tool_content
+                            except (json.JSONDecodeError, TypeError):
+                                parameters = {}
+                            
+                            # Invoke the on_tool_use callback
+                            if self.on_tool_use and self._current_tool_use_id:
+                                try:
+                                    tool_result = await self.on_tool_use(
+                                        tool_name,
+                                        self._current_tool_use_id,
+                                        parameters
+                                    )
+                                    # Send the tool result back to the stream
+                                    await self.send_tool_result(
+                                        self._current_tool_use_id,
+                                        tool_result
+                                    )
+                                except Exception as e:
+                                    print(f"Error executing tool '{tool_name}': {e}")
+                                    # Send error result back
+                                    await self.send_tool_result(
+                                        self._current_tool_use_id,
+                                        {"error": "execution_failed", "message": str(e)}
+                                    )
+                            
+                            # Reset tool use state
+                            self._current_tool_use_id = None
+                            self._current_tool_name = None
+                            self._current_tool_content = ""
                         
                         # Handle text output event
                         elif 'textOutput' in json_data['event']:

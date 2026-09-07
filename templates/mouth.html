@@ -3,9 +3,68 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Robot Mouth Visualizer</title>
+    <title>Sunny Robot Head Control</title>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+        "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3.1.4/lib/three-vrm.module.min.js"
+      }
+    }
+    </script>
     <style>
+        #avatar-canvas-wrap {
+            position: relative;
+            width: 100%;
+            height: 320px;
+            border-radius: 15px;
+            overflow: hidden;
+            background: #202436;
+            margin: 12px 0;
+        }
+        #avatar-canvas-wrap canvas { display: block; width: 100%; height: 100%; }
+
+        /* Teaching-mode overlay: names the emotion the avatar is showing. */
+        #emotion-label {
+            position: absolute;
+            top: 14px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-6px);
+            background: rgba(0, 0, 0, 0.55);
+            color: #fff;
+            padding: 8px 20px;
+            border-radius: 999px;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            opacity: 0;
+            transition: opacity 0.18s ease, transform 0.18s ease;
+            pointer-events: none;
+            z-index: 5;
+        }
+        #emotion-label.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        /* Layout order so the primary controls sit right under the avatar,
+           visible without scrolling. Status/labels move below the controls. */
+        .container { display: flex; flex-direction: column; }
+        .container > h1 { order: 0; margin-bottom: 4px; }
+        .container > .subtitle { order: 1; margin-bottom: 8px; }
+        #avatar-canvas-wrap { order: 2; }
+        .control-panel { order: 3; }
+        .viseme-label { order: 4; }
+        .text-display { order: 5; }
+        .status { order: 6; }
+        .mouth-container { order: 9; }
+
+        /* Anchor to top instead of vertically centering the tall container,
+           so header + avatar + controls are visible without scrolling. */
+        body { justify-content: flex-start !important; padding-top: 12px !important; }
+        .container { padding-top: 20px !important; padding-bottom: 20px !important; }
         body {
             margin: 0;
             padding: 20px;
@@ -521,7 +580,9 @@
         <h1>🤖 Sunny Robot Head Control</h1>
         <p class="subtitle">Real-time lip sync & servo calibration</p>
         
-        <div class="mouth-container">
+        <div id="avatar-canvas-wrap"><div id="emotion-label"></div></div>
+
+        <div class="mouth-container" style="display:none;">
             <div class="robot-head">
                 <!-- Skull structure -->
                 <div class="head-outline"></div>
@@ -595,8 +656,7 @@
             </div>
         </div>
         
-        <div class="viseme-label" id="viseme-label">CLOSED - Rest position</div>
-        
+
         <div class="text-display">
             <div class="current-text" id="current-text">Waiting for speech...</div>
             <div class="phoneme" id="phoneme"></div>
@@ -624,6 +684,14 @@
             </div>
             
             <div class="settings-panel" id="settings">
+                <div class="setting-item">
+                    <label class="setting-label">🤖 Voice Model</label>
+                    <select class="setting-input" id="voice-model-select">
+                        <option value="openai_realtime" selected>OpenAI Realtime Live</option>
+                        <option value="nova_sonic">Nova Sonic 2 (AWS)</option>
+                    </select>
+                    <small style="color: #999; font-size: 11px; display: block; margin-top: 5px;">⚠️ Model change takes effect on next session start</small>
+                </div>
                 <div class="setting-item">
                     <label class="setting-label">🎤 Microphone</label>
                     <select class="setting-input" id="microphone-select">
@@ -840,7 +908,6 @@
         const textElement = document.getElementById('current-text');
         const phonemeElement = document.getElementById('phoneme');
         const statusElement = document.getElementById('status');
-        const visemeLabelElement = document.getElementById('viseme-label');
         
         // Viseme to servo angle mapping (matches jaw_controller.py)
         const visemeToAngle = {
@@ -901,15 +968,68 @@
             statusElement.textContent = '⚠️ Disconnected from server';
         });
         
+        // Lip-sync delay (ms). Visemes are computed ahead of audible playback
+        // (speaker output-buffer latency), so the avatar is delayed to match the
+        // sound. Default comes from the server's measured latency; tune live by
+        // ear with window.setVisemeDelay(ms) or ?visemeDelay=NN (persists in
+        // localStorage). Call window.setVisemeDelay(null) to return to auto.
+        let visemeDelayOverride = (() => {
+            const q = new URLSearchParams(location.search).get('visemeDelay');
+            if (q !== null && q !== '' && Number.isFinite(+q)) return +q;
+            const ls = localStorage.getItem('visemeDelayMs');
+            return ls !== null && Number.isFinite(+ls) ? +ls : null;
+        })();
+        window.setVisemeDelay = (ms) => {
+            if (ms === null || ms === undefined) {
+                visemeDelayOverride = null;
+                localStorage.removeItem('visemeDelayMs');
+            } else {
+                visemeDelayOverride = +ms;
+                localStorage.setItem('visemeDelayMs', String(visemeDelayOverride));
+            }
+            console.log('viseme delay =', visemeDelayOverride === null ? 'auto (server measured)' : visemeDelayOverride + 'ms');
+            return visemeDelayOverride;
+        };
+
+        // Amplitude-category -> VRM vowel fallback (used only if no phoneme vrm field).
+        const VISEME_TO_VRM = {
+            CLOSED: 'neutral', NARROW: 'ih', ROUNDED: 'ou',
+            MEDIUM: 'ee', MEDIUM_OPEN: 'oh', WIDE: 'aa'
+        };
+        const VRM_FALLBACK_WEIGHT = {
+            CLOSED: 0, NARROW: 0.15, ROUNDED: 0.20,
+            MEDIUM: 0.30, MEDIUM_OPEN: 0.45, WIDE: 0.65
+        };
+
         socket.on('viseme_update', (data) => {
             const viseme = data.viseme || 'CLOSED';
             const text = data.text || '';
             
-            // Update jaw animation
+            // Update legacy (hidden) jaw display
             updateJaw(viseme);
-            
-            // Update viseme label
-            visemeLabelElement.textContent = visemeDescriptions[viseme] || viseme;
+
+            // Drive the VRM avatar: prefer phoneme-accurate vrm field from the driver.
+            if (window.avatar) {
+                const applyAvatar = () => {
+                    if (typeof data.vrm === 'string') {
+                        const w = Number.isFinite(data.vrm_weight)
+                            ? data.vrm_weight
+                            : (Number.isFinite(data.intensity) ? data.intensity : 1.0);
+                        window.avatar.setViseme(data.vrm, w);
+                    } else {
+                        const target = VISEME_TO_VRM[viseme] || 'neutral';
+                        const w = Number.isFinite(data.intensity)
+                            ? data.intensity
+                            : (VRM_FALLBACK_WEIGHT[viseme] ?? 0);
+                        window.avatar.setViseme(target, w);
+                    }
+                };
+                // Delay the mouth to align with audible playback. A constant
+                // delay preserves frame order (all updates shift equally).
+                const serverDelay = Number.isFinite(data.sync_delay_ms) ? data.sync_delay_ms : 0;
+                const delay = visemeDelayOverride !== null ? visemeDelayOverride : serverDelay;
+                if (delay > 0) setTimeout(applyAvatar, delay); else applyAvatar();
+            }
             
             // Update text display
             if (text) {
@@ -936,6 +1056,21 @@
         
         // Eye tracking update
         socket.on('eye_position_update', (data) => {
+            // Drive VRM avatar gaze: prefer explicit normalized gaze, else derive.
+            if (window.avatar) {
+                if (Number.isFinite(data.gaze_x) && Number.isFinite(data.gaze_y)) {
+                    window.avatar.setEye(data.gaze_x, data.gaze_y);
+                } else {
+                    const xs = [data.left_x, data.right_x].filter(Number.isFinite);
+                    const ys = [data.left_y, data.right_y].filter(Number.isFinite);
+                    if (xs.length && ys.length) {
+                        const x = xs.reduce((a, b) => a + b, 0) / xs.length;
+                        const y = ys.reduce((a, b) => a + b, 0) / ys.length;
+                        window.avatar.setEye((x - 90) / 30, (y - 90) / 30);
+                    }
+                }
+            }
+
             const leftEye = document.getElementById('left-eye');
             const rightEye = document.getElementById('right-eye');
             
@@ -958,8 +1093,67 @@
             }
         });
         
+        // Teaching mode: show the emotion word over the avatar when it sets an
+        // expression, to help viewers connect the feeling word to the face.
+        // Toggle live with window.setTeachingMode(true/false) or ?teach=0/1;
+        // persists in localStorage. Default ON (this is a teaching tool).
+        const emotionLabelEl = document.getElementById('emotion-label');
+        const EMOTION_LABELS = { happy: 'Happy 🙂', sad: 'Sad 🙁', angry: 'Angry 😠', relaxed: 'Calm 😌' };
+        let teachingMode = (() => {
+            const q = new URLSearchParams(location.search).get('teach');
+            if (q === '0' || q === 'false') return false;
+            if (q === '1' || q === 'true') return true;
+            const ls = localStorage.getItem('teachingMode');
+            return ls === null ? true : ls === 'true';
+        })();
+        function showEmotionLabel(emotion, weight) {
+            if (!emotionLabelEl) return;
+            if (teachingMode && emotion && emotion !== 'neutral' && weight > 0) {
+                emotionLabelEl.textContent = EMOTION_LABELS[emotion]
+                    || (emotion.charAt(0).toUpperCase() + emotion.slice(1));
+                emotionLabelEl.classList.add('show');
+            } else {
+                emotionLabelEl.classList.remove('show');
+            }
+        }
+        window.setTeachingMode = (on) => {
+            teachingMode = !!on;
+            localStorage.setItem('teachingMode', String(teachingMode));
+            if (!teachingMode) showEmotionLabel('neutral', 0);
+            console.log('teaching mode =', teachingMode);
+            return teachingMode;
+        };
+
+        // Facial emotion expression (driven by the assistant's set_expression tool)
+        let _expressionHoldTimer = null;
+        socket.on('expression_update', (data) => {
+            if (!window.avatar) return;
+            const emotion = data.emotion || 'neutral';
+            const weight = Number.isFinite(data.weight) ? data.weight : 1.0;
+            window.avatar.setEmotion(emotion, weight);
+            showEmotionLabel(emotion, weight);
+            if (_expressionHoldTimer !== null) { clearTimeout(_expressionHoldTimer); _expressionHoldTimer = null; }
+            if (Number.isFinite(data.hold_ms) && data.hold_ms > 0) {
+                _expressionHoldTimer = setTimeout(() => {
+                    window.avatar.setEmotion('neutral', 0);
+                    showEmotionLabel('neutral', 0);
+                    _expressionHoldTimer = null;
+                }, data.hold_ms);
+            }
+        });
+
         // Eye blinking
+        let _avatarBlinkTimer = null;
         socket.on('blink_eyes', () => {
+            if (window.avatar) {
+                if (_avatarBlinkTimer !== null) clearTimeout(_avatarBlinkTimer);
+                window.avatar.setBlink(1);
+                _avatarBlinkTimer = setTimeout(() => {
+                    window.avatar.setBlink(0);
+                    _avatarBlinkTimer = null;
+                }, 120);
+            }
+
             const leftEye = document.getElementById('left-eye');
             const rightEye = document.getElementById('right-eye');
             
@@ -985,8 +1179,18 @@
         // Load available devices
         async function loadDevices() {
             try {
+                // Fetch saved settings first
+                const settingsResponse = await fetch('/api/settings');
+                const savedSettings = await settingsResponse.json();
+                
                 const response = await fetch('/api/devices');
                 const devices = await response.json();
+                
+                // Set voice model from saved settings
+                const voiceModelSelect = document.getElementById('voice-model-select');
+                if (savedSettings.voice_model) {
+                    voiceModelSelect.value = savedSettings.voice_model;
+                }
                 
                 // Populate microphone dropdown
                 const micSelect = document.getElementById('microphone-select');
@@ -995,7 +1199,11 @@
                     const option = document.createElement('option');
                     option.value = mic.index;
                     option.textContent = mic.name;
-                    if (idx === 0) option.selected = true;
+                    if (savedSettings.microphone_index !== null && savedSettings.microphone_index !== undefined) {
+                        if (mic.index === savedSettings.microphone_index) option.selected = true;
+                    } else if (idx === 0) {
+                        option.selected = true;
+                    }
                     micSelect.appendChild(option);
                 });
                 
@@ -1006,7 +1214,11 @@
                     const option = document.createElement('option');
                     option.value = speaker.index;
                     option.textContent = speaker.name;
-                    if (idx === 0) option.selected = true;
+                    if (savedSettings.speaker_index !== null && savedSettings.speaker_index !== undefined) {
+                        if (speaker.index === savedSettings.speaker_index) option.selected = true;
+                    } else if (idx === 0) {
+                        option.selected = true;
+                    }
                     speakerSelect.appendChild(option);
                 });
             } catch (error) {
@@ -1053,6 +1265,10 @@
         }
         
         // Send settings updates
+        document.getElementById('voice-model-select').addEventListener('change', (e) => {
+            socket.emit('control', {action: 'set_voice_model', value: e.target.value});
+        });
+        
         document.getElementById('microphone-select').addEventListener('change', (e) => {
             socket.emit('control', {action: 'set_microphone', value: parseInt(e.target.value)});
         });
@@ -1262,6 +1478,172 @@
                 rightEye.classList.remove('blinking');
             }, 120);
         }
+    </script>
+
+    <!-- VRM avatar renderer. Exposes window.avatar.{setViseme,setEye,setBlink};
+         driven by the Socket.IO handlers above. -->
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+
+        const wrap = document.getElementById('avatar-canvas-wrap');
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+        renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        wrap.appendChild(renderer.domElement);
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x202436);
+        const camera = new THREE.PerspectiveCamera(30, wrap.clientWidth / wrap.clientHeight, 0.1, 20);
+        camera.position.set(0, 1.35, 0.62);
+        camera.lookAt(0, 1.35, 0);
+
+        const dir = new THREE.DirectionalLight(0xffffff, Math.PI);
+        dir.position.set(1, 2, 2);
+        scene.add(dir);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6 * Math.PI));
+
+        let currentVrm = null;
+        const lookTarget = new THREE.Object3D();
+        scene.add(lookTarget);
+        let headY = 1.35;
+
+        // Gaze is driven by rotating the humanoid eye bones directly. This
+        // model's VRM lookAt applier does not move the eyes, so we bypass it.
+        // Max deflection in radians (~29° yaw, ~17° pitch).
+        let leftEyeBone = null, rightEyeBone = null;
+        const EYE_YAW = 0.5, EYE_PITCH = 0.3;
+
+        const control = { viseme: 'neutral', visemeWeight: 0, eyeX: 0, eyeY: 0, blink: 0,
+                          emotion: 'neutral', emotionWeight: 0 };
+        const VISEMES = ['aa', 'ih', 'ou', 'ee', 'oh'];
+        // Standard VRM emotion expressions (three-vrm normalizes VRM 0.x
+        // joy/angry/sorrow/fun to these names). Whichever the model actually
+        // ships is populated into `availableExpressions` on load.
+        const EMOTIONS = ['happy', 'angry', 'sad', 'relaxed', 'surprised'];
+        let availableExpressions = [];
+
+        // Per-expression weight ceilings for THIS model. Avatar 1.vrm's
+        // blendshapes are badly overdriven at weight 1.0: `ih` pushes the lower
+        // lip up over the upper (a pout), `aa` fully protrudes the tongue, and
+        // `oh`/`ee` gape. These gains scale the incoming [0,1] weight down to the
+        // range where each shape still reads as natural speech. Model-specific
+        // tuning belongs here in the renderer (the only place the model is known).
+        const VISEME_GAIN = { aa: 0.45, ih: 0.30, ou: 0.90, ee: 0.50, oh: 0.80 };
+
+        window.avatar = {
+            setViseme(name, weight = 1.0) {
+                control.viseme = name;
+                const w = Math.max(0, Math.min(1, weight));
+                control.visemeWeight = w * (VISEME_GAIN[name] ?? 1);
+            },
+            setEye(x, y) {
+                control.eyeX = Math.max(-1, Math.min(1, x));
+                control.eyeY = Math.max(-1, Math.min(1, y));
+            },
+            setBlink(v) { control.blink = Math.max(0, Math.min(1, v)); },
+            // Drive a facial emotion expression (happy/angry/sad/relaxed/surprised).
+            // Pass 'neutral' or weight 0 to clear.
+            setEmotion(name, weight = 1.0) {
+                control.emotion = name || 'neutral';
+                control.emotionWeight = Math.max(0, Math.min(1, weight));
+            },
+            // Debug: which expressions this model actually exposes.
+            listExpressions() { return availableExpressions.slice(); }
+        };
+
+        const loader = new GLTFLoader();
+        loader.register((parser) => new VRMLoaderPlugin(parser));
+        loader.load('/avatar/model', (gltf) => {
+            const vrm = gltf.userData.vrm;
+            VRMUtils.removeUnnecessaryVertices(gltf.scene);
+            // VRM 0.x models face -Z; rotate them 180° to face the camera.
+            // No-op for VRM 1.0 (guarded by meta version).
+            if (vrm.meta && vrm.meta.metaVersion === '0') {
+                VRMUtils.rotateVRM0(vrm);
+            }
+            scene.add(vrm.scene);
+            currentVrm = vrm;
+
+            // Record which expressions the model exposes (for emotion control).
+            if (vrm.expressionManager && Array.isArray(vrm.expressionManager.expressions)) {
+                availableExpressions = vrm.expressionManager.expressions
+                    .map((e) => e.expressionName || e.name)
+                    .filter(Boolean);
+                console.log('VRM expressions:', availableExpressions.join(', '));
+            }
+
+            const headNode = vrm.humanoid && vrm.humanoid.getNormalizedBoneNode
+                ? vrm.humanoid.getNormalizedBoneNode('head') : null;
+            if (headNode) {
+                const p = new THREE.Vector3();
+                headNode.getWorldPosition(p);
+                headY = p.y;
+            }
+            // Relax arms down from the default T/A-pose.
+            const hum = vrm.humanoid;
+            if (hum && hum.getNormalizedBoneNode) {
+                const lUp = hum.getNormalizedBoneNode('leftUpperArm');
+                const rUp = hum.getNormalizedBoneNode('rightUpperArm');
+                const lLow = hum.getNormalizedBoneNode('leftLowerArm');
+                const rLow = hum.getNormalizedBoneNode('rightLowerArm');
+                if (lUp) lUp.rotation.z = 1.4;
+                if (rUp) rUp.rotation.z = -1.4;
+                if (lLow) lLow.rotation.z = 0.15;
+                if (rLow) rLow.rotation.z = -0.15;
+                if (vrm.update) vrm.update(0);
+            }
+
+            // Capture eye bones for direct gaze control, and disable the VRM
+            // lookAt applier so it doesn't fight (or zero) our manual rotation.
+            if (hum && hum.getNormalizedBoneNode) {
+                leftEyeBone = hum.getNormalizedBoneNode('leftEye');
+                rightEyeBone = hum.getNormalizedBoneNode('rightEye');
+            }
+            if (vrm.lookAt) vrm.lookAt.target = null;
+
+            // Pull back and aim near the top of the head so the full head +
+            // shoulders are framed without clipping the crown.
+            camera.position.set(0, headY + 0.08, 0.95);
+            camera.lookAt(0, headY + 0.02, 0);
+        }, undefined, (err) => console.error('VRM load error:', err));
+
+        const clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            if (currentVrm) {
+                const em = currentVrm.expressionManager;
+                if (em) {
+                    for (const v of VISEMES) em.setValue(v, 0);
+                    if (VISEMES.includes(control.viseme)) em.setValue(control.viseme, control.visemeWeight);
+                    em.setValue('blink', control.blink);
+                    // Emotion expression (reset all, then apply the active one).
+                    for (const e of EMOTIONS) em.setValue(e, 0);
+                    if (control.emotion !== 'neutral' && control.emotionWeight > 0) {
+                        em.setValue(control.emotion, control.emotionWeight);
+                    }
+                }
+                // Drive gaze by rotating the eye bones (set before update so the
+                // normalized pose propagates to the raw skeleton). eyeX>0 looks
+                // to the model's right, eyeY>0 looks up.
+                const yaw = control.eyeX * EYE_YAW;
+                const pitch = -control.eyeY * EYE_PITCH;
+                if (leftEyeBone) leftEyeBone.rotation.set(pitch, yaw, 0);
+                if (rightEyeBone) rightEyeBone.rotation.set(pitch, yaw, 0);
+                currentVrm.update(delta);
+            }
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            if (!wrap.clientWidth) return;
+            camera.aspect = wrap.clientWidth / wrap.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+        });
     </script>
 </body>
 </html>
