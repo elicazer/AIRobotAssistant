@@ -49,6 +49,8 @@ strands-agents-tools
 # OpenAI Realtime Voice
 websockets>=12.0
 pyaec>=1.0.0
+# Pin the macOS-safe PortAudio binding used by OpenAI capture/playback.
+sounddevice==0.5.6
 
 # Testing
 hypothesis>=6.0.0

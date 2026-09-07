@@ -1,7 +1,7 @@
 {
   "voice_id": "matthew",
-  "microphone_index": 4,
-  "speaker_index": 1,
+  "microphone_index": 0,
+  "speaker_index": 2,
   "speech_speed": 17,
   "jaw_stop_angle": 90,
   "jaw_open_angle": 100,
@@ -18,7 +18,7 @@
   "deepface_analysis_interval": 1.5,
   "greeting_cooldown_seconds": 30,
   "welcome_back_threshold_seconds": 300,
-  "agentcore_memory_resource_id": "inmoov_robot_personalization-6f50s54fi1",
+  "agentcore_memory_resource_id": "",
   "strands_agent_model_id": "anthropic.claude-sonnet-4-20250514",
   "tool_timeout_seconds": 10,
   "aws_region": "us-east-1",
@@ -26,6 +26,8 @@
   "openai_api_key": "",
   "openai_voice_id": "alloy",
   "openai_model_id": "gpt-realtime-2.1",
+  "openai_barge_in_enabled": false,
+  "openai_acoustic_tail_ms": 700,
   "avatar_vrm_file": "Avatar 1.vrm",
   "viseme_analyzer": "headaudio",
   "eye_servos": {

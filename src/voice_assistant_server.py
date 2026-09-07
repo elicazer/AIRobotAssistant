@@ -89,6 +89,10 @@ DEFAULT_SETTINGS = {
     'openai_api_key': '',
     'openai_voice_id': 'alloy',
     'openai_model_id': 'gpt-realtime-2.1',
+    # True keeps microphone input live and lets server VAD interrupt playback.
+    # False enables deterministic half-duplex suppression and the acoustic tail.
+    'openai_barge_in_enabled': True,
+    'openai_acoustic_tail_ms': 700,
     'avatar_vrm_file': 'sample.vrm',
     'viseme_analyzer': 'headaudio',  # 'headaudio' (phoneme) or 'amplitude'
     # Milliseconds to delay avatar visemes so the mouth matches audible speech
@@ -353,12 +357,14 @@ async def run_voice_assistant():
         else:
             from openai_realtime_client import OpenAIRealtimeClient
             nova_client = OpenAIRealtimeClient(
-                model_id=settings.get('openai_model_id', 'gpt-4o-realtime-preview'),
+                model_id=settings.get('openai_model_id', 'gpt-realtime-2.1'),
                 voice_id=settings.get('openai_voice_id', 'alloy'),
                 system_prompt=SYSTEM_PROMPT,
                 input_device_index=microphone_index,
                 output_device_index=speaker_index,
                 api_key=api_key,
+                acoustic_tail_ms=settings.get('openai_acoustic_tail_ms', 700),
+                barge_in_enabled=settings.get('openai_barge_in_enabled', True),
             )
             print(f"🔊 Using OpenAI Realtime voice model (voice={settings.get('openai_voice_id', 'alloy')})")
     
@@ -639,9 +645,13 @@ async def run_voice_assistant():
             else:
                 print("   ⏭️  Skipping greeting (model already responding to user)")
         
-        # Wait until stopped
-        while is_running:
+        # Wait until stopped or until the provider reports a terminal failure.
+        while is_running and nova_client.is_active:
             await asyncio.sleep(0.1)
+
+        if is_running and not nova_client.is_active:
+            logger.error("Voice provider became inactive; ending the current session")
+            is_running = False
         
         # Cancel tasks gracefully
         print("🛑 Cancelling audio tasks...")
@@ -1076,7 +1086,12 @@ def process_control_commands():
                 voice_id = value
                 settings['voice_id'] = value
                 settings_changed = True
-                print(f"🗣️  Voice changed to: {voice_id}")
+                print(f"🗣️  Nova voice changed to: {voice_id} (takes effect on next session start)")
+
+            elif action == 'set_openai_voice':
+                settings['openai_voice_id'] = value
+                settings_changed = True
+                print(f"🗣️  OpenAI voice changed to: {value} (takes effect on next session start)")
             
             elif action == 'set_voice_model':
                 settings['voice_model'] = value

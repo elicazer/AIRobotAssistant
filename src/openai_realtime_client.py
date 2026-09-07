@@ -149,12 +149,14 @@ class OpenAIRealtimeClient:
 
     def __init__(
         self,
-        model_id: str = "gpt-4o-realtime-preview",
+        model_id: str = "gpt-realtime-2.1",
         voice_id: str = "alloy",
         system_prompt: Optional[str] = None,
         input_device_index: Optional[int] = None,
         output_device_index: Optional[int] = None,
         api_key: Optional[str] = None,
+        acoustic_tail_ms: int = 700,
+        barge_in_enabled: bool = True,
     ):
         # Configuration
         self.model_id = model_id
@@ -166,6 +168,8 @@ class OpenAIRealtimeClient:
         self.input_device_index = input_device_index
         self.output_device_index = output_device_index
         self._api_key = api_key
+        self.acoustic_tail_ms = max(0, int(acoustic_tail_ms))
+        self.barge_in_enabled = bool(barge_in_enabled)
 
         # Public state
         self.is_active: bool = False
@@ -181,6 +185,12 @@ class OpenAIRealtimeClient:
         self._ws = None
         self._audio_queue: asyncio.Queue = asyncio.Queue()
         self._event_task: Optional[asyncio.Task] = None
+        self._input_audio_lock = asyncio.Lock()
+        self._assistant_playback_active = False
+        self._assistant_audio_done = True
+        self._mic_suppressed_until = 0.0
+        self._playback_interrupted = False
+        self._discard_assistant_audio = False
 
         # Measured speaker output-buffer latency (ms). Visemes are computed at
         # audio-write time, but PortAudio holds the audio in its output buffer
@@ -283,7 +293,22 @@ class OpenAIRealtimeClient:
                 "type": "realtime",
                 "instructions": self.system_prompt,
                 "audio": {
-                    "output": {"voice": self.voice_id},
+                    "input": {
+                        "format": {"type": "audio/pcm", "rate": 24000},
+                        "transcription": {"model": "whisper-1"},
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": 0.7,
+                            "prefix_padding_ms": 300,
+                            "silence_duration_ms": 700,
+                            "create_response": True,
+                            "interrupt_response": self.barge_in_enabled,
+                        },
+                    },
+                    "output": {
+                        "format": {"type": "audio/pcm", "rate": 24000},
+                        "voice": self.voice_id,
+                    },
                 },
                 "tools": tools,
             }
@@ -297,7 +322,7 @@ class OpenAIRealtimeClient:
                 "turn_detection": {
                     "type": "server_vad",
                     "threshold": 0.7,
-                    "prefix_padding_ms": 500,
+                    "prefix_padding_ms": 300,
                     "silence_duration_ms": 700,
                 },
                 "tools": tools,
@@ -308,6 +333,13 @@ class OpenAIRealtimeClient:
             "session": session_config,
         }
         await self._ws.send(json.dumps(session_update))
+
+        # Reset audio-turn state before making this session active.
+        self._assistant_playback_active = False
+        self._assistant_audio_done = True
+        self._mic_suppressed_until = 0.0
+        self._playback_interrupted = False
+        self._discard_assistant_audio = False
 
         # Mark session as active
         self.is_active = True
@@ -328,6 +360,11 @@ class OpenAIRealtimeClient:
         """
         # 1. Stop loops immediately
         self.is_active = False
+        self._assistant_playback_active = False
+        self._assistant_audio_done = True
+        self._mic_suppressed_until = 0.0
+        self._playback_interrupted = False
+        self._discard_assistant_audio = False
 
         # 2. Cancel the event processing task if it exists
         if self._event_task is not None:
@@ -364,47 +401,65 @@ class OpenAIRealtimeClient:
         """
         logger.debug("start_audio_input called (no-op for OpenAI Realtime)")
 
-    async def send_audio_chunk(self, audio_bytes: bytes) -> None:
-        """Resample 16kHz→24kHz, base64 encode, send input_audio_buffer.append.
+    def _input_audio_is_suppressed(self) -> bool:
+        """Return whether half-duplex mode should drop microphone audio."""
+        if self.barge_in_enabled:
+            return False
+        return (
+            self._assistant_playback_active
+            or asyncio.get_running_loop().time() < self._mic_suppressed_until
+        )
 
-        Args:
-            audio_bytes: Raw PCM16 mono audio at 16000 Hz.
-        """
+    async def _send_input_audio(self, audio_bytes: bytes) -> bool:
+        """Append 24 kHz PCM16 input unless half-duplex suppression is active."""
         import base64
 
-        if not self.is_active:
-            return
-
-        # Resample from 16kHz to 24kHz
-        resampled = resample_16k_to_24k(audio_bytes)
-
-        # Base64 encode the resampled audio
-        encoded = base64.b64encode(resampled).decode("ascii")
-
-        # Send input_audio_buffer.append event
-        event = {
-            "type": "input_audio_buffer.append",
-            "audio": encoded,
-        }
-        await self._ws.send(json.dumps(event))
-
-    async def _send_audio_chunk_raw(self, audio_bytes: bytes) -> None:
-        """Base64 encode and send already-24kHz audio. No resampling.
-
-        Args:
-            audio_bytes: Raw PCM16 mono audio already at 24000 Hz.
-        """
-        import base64
-
-        if not self.is_active or not self._ws:
-            return
+        if not self.is_active or not self._ws or self._input_audio_is_suppressed():
+            return False
 
         encoded = base64.b64encode(audio_bytes).decode("ascii")
         event = {
             "type": "input_audio_buffer.append",
             "audio": encoded,
         }
-        await self._ws.send(json.dumps(event))
+
+        # Re-check under the lock so half-duplex playback cannot clear the
+        # server buffer and then lose a race to an append waiting to send.
+        async with self._input_audio_lock:
+            if not self.is_active or not self._ws or self._input_audio_is_suppressed():
+                return False
+            await self._ws.send(json.dumps(event))
+        return True
+
+    async def _begin_assistant_playback(self) -> None:
+        """Track playback and engage input suppression when barge-in is off."""
+        if self._assistant_playback_active:
+            return
+
+        self._assistant_playback_active = True
+        if self.barge_in_enabled:
+            logger.debug("🎙️ Barge-in active during assistant playback")
+            return
+
+        async with self._input_audio_lock:
+            if self.is_active and self._ws:
+                await self._ws.send(json.dumps({"type": "input_audio_buffer.clear"}))
+        logger.info("🔇 Microphone forwarding paused during assistant playback")
+
+    async def send_audio_chunk(self, audio_bytes: bytes) -> None:
+        """Resample 16kHz→24kHz and forward it when the mic is enabled.
+
+        Args:
+            audio_bytes: Raw PCM16 mono audio at 16000 Hz.
+        """
+        if not self.is_active or self._input_audio_is_suppressed():
+            return
+
+        await self._send_input_audio(resample_16k_to_24k(audio_bytes))
+
+    async def _send_audio_chunk_raw(self, audio_bytes: bytes) -> None:
+        """Forward already-24kHz PCM16 audio when the mic is enabled."""
+        await self._send_input_audio(audio_bytes)
 
     async def end_audio_input(self) -> None:
         """Signal end of audio input turn.
@@ -491,133 +546,239 @@ class OpenAIRealtimeClient:
         }
         await self._ws.send(json.dumps(response_create_event))
 
-    async def capture_audio(self) -> None:
-        """Capture audio from microphone and send chunks to OpenAI.
+    @staticmethod
+    def _resolve_audio_device(sd, configured_index: Optional[int], direction: str):
+        """Return a usable sounddevice index, falling back to the OS default."""
+        if configured_index is None:
+            return None
 
-        Opens a PyAudio input stream at 24000 Hz and streams raw audio
-        directly to the API. OpenAI's server-side VAD handles turn detection.
-        """
-        import pyaudio
-        from concurrent.futures import ThreadPoolExecutor
-
-        SAMPLE_RATE = 24000
-        CHANNELS = 1
-        FORMAT = pyaudio.paInt16
-        CHUNK_SIZE = 2400  # 100ms chunks — good balance of latency vs overhead
-
-        p = pyaudio.PyAudio()
-        stream = p.open(
-            format=FORMAT,
-            channels=CHANNELS,
-            rate=SAMPLE_RATE,
-            input=True,
-            frames_per_buffer=CHUNK_SIZE,
-            input_device_index=self.input_device_index,
-        )
-
-        logger.info(f"🎤 Microphone capture started (24kHz, mono, PCM16, device={self.input_device_index})")
-
-        loop = asyncio.get_event_loop()
-        executor = ThreadPoolExecutor(max_workers=1)
-
+        channel_key = "max_input_channels" if direction == "input" else "max_output_channels"
         try:
-            while self.is_active:
-                audio_data = await loop.run_in_executor(
-                    executor, stream.read, CHUNK_SIZE, False
+            device_index = int(configured_index)
+            device = sd.query_devices(device_index)
+            if int(device.get(channel_key, 0)) < 1:
+                raise ValueError(f"device has no {direction} channels")
+            return device_index
+        except (TypeError, ValueError, sd.PortAudioError) as exc:
+            logger.warning(
+                "Configured %s device %r is unavailable (%s); using the system default",
+                direction,
+                configured_index,
+                exc,
+            )
+            return None
+
+    @classmethod
+    def _open_sounddevice_stream(
+        cls,
+        sd,
+        stream_type,
+        configured_index: Optional[int],
+        direction: str,
+        **stream_options,
+    ):
+        """Open and start a raw stream, retrying once with the OS default."""
+        device_index = cls._resolve_audio_device(sd, configured_index, direction)
+        candidates = [device_index]
+        if device_index is not None:
+            candidates.append(None)
+
+        errors = []
+        for candidate in candidates:
+            stream = None
+            try:
+                check_settings = (
+                    sd.check_input_settings
+                    if direction == "input"
+                    else sd.check_output_settings
                 )
-                await self._send_audio_chunk_raw(audio_data)
+                check_settings(
+                    device=candidate,
+                    channels=stream_options["channels"],
+                    dtype=stream_options["dtype"],
+                    samplerate=stream_options["samplerate"],
+                )
+                logger.info("Opening %s stream (device=%s)", direction, candidate)
+                stream = stream_type(device=candidate, **stream_options)
+                stream.start()
+                return stream, candidate
+            except Exception as exc:
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+                errors.append(f"device {candidate}: {exc}")
+                if candidate is not None:
+                    logger.warning(
+                        "Could not open configured %s device %s (%s); retrying the system default",
+                        direction,
+                        candidate,
+                        exc,
+                    )
 
-        except Exception as e:
-            logger.error(f"Error capturing audio: {e}")
-        finally:
-            stream.stop_stream()
-            stream.close()
-            p.terminate()
-            executor.shutdown(wait=False)
-            logger.info("Audio capture stopped.")
-
-    async def play_audio(self) -> None:
-        """Dequeue audio bytes and write to speaker output.
-
-        Opens a PyAudio output stream at 24000 Hz (PCM16 mono) and plays
-        audio from the internal queue while is_active is True.
-        Uses a dedicated thread for blocking PyAudio writes to avoid
-        blocking the asyncio event loop.
-        """
-        import pyaudio
-        from concurrent.futures import ThreadPoolExecutor
-
-        p = pyaudio.PyAudio()
-        stream = p.open(
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=24000,
-            output=True,
-            output_device_index=self.output_device_index,
+        raise RuntimeError(
+            f"Unable to open a 24 kHz mono {direction} stream: {'; '.join(errors)}"
         )
 
-        # Estimate the output latency so the mouth can be delayed to match
-        # audible playback (see output_latency_ms docstring). NOTE: PortAudio's
-        # get_output_latency() is wildly inflated for some devices — a Bluetooth
-        # headset here reports >1000ms — which would delay the mouth by ~1s and
-        # make speech onsets look badly late. The device's advertised
-        # defaultLowOutputLatency is far more realistic, so prefer it and cap to
-        # a sane range. Users can still fine-tune by ear via viseme_sync_delay_ms.
-        try:
-            if self.output_device_index is not None:
-                info = p.get_device_info_by_index(self.output_device_index)
-            else:
-                info = p.get_default_output_device_info()
-            est_ms = float(info.get("defaultLowOutputLatency", 0.0)) * 1000
-            self.output_latency_ms = int(round(max(20.0, min(est_ms, 400.0))))
-        except Exception:
-            self.output_latency_ms = 0
+    async def capture_audio(self) -> None:
+        """Capture 24 kHz PCM16 microphone audio with sounddevice.
 
-        # Separate executors: one for audio write (must be serial), one for callbacks
-        write_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="oai_audio_wr")
-        cb_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="oai_audio_cb")
+        The OpenAI path intentionally uses sounddevice instead of PyAudio. On
+        macOS, the PyAudio C extension can segfault inside PyAudio_OpenStream
+        when the camera and ML runtimes are active; sounddevice avoids that
+        wrapper while retaining the same PortAudio device support.
+        """
+        import sounddevice as sd
+        from concurrent.futures import ThreadPoolExecutor
+
+        sample_rate = 24000
+        chunk_size = 2400  # 100 ms
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="oai_audio_in")
+        stream = None
         loop = asyncio.get_running_loop()
 
-        logger.info(
-            f"🔊 Audio playback started (24kHz, mono, PCM16, device={self.output_device_index}, "
-            f"output_latency={self.output_latency_ms}ms)"
-        )
+        try:
+            stream, device_index = self._open_sounddevice_stream(
+                sd,
+                sd.RawInputStream,
+                self.input_device_index,
+                "input",
+                samplerate=sample_rate,
+                blocksize=chunk_size,
+                channels=1,
+                dtype="int16",
+            )
+            logger.info(
+                "🎤 Microphone capture started (24kHz, mono, PCM16, device=%s)",
+                device_index,
+            )
 
-        # Paced-writer state. We deliberately bound how far ahead of real-time
-        # we buffer audio. Without this, we hand PortAudio the whole queue as
-        # fast as it accepts it; some devices (e.g. Bluetooth) buffer >1s, so
-        # the mouth (computed at write time) would need a ~1s delay to match
-        # steady-state playback — yet at speech onset the buffer is empty and
-        # audio is audible almost immediately, so no single constant delay can
-        # fit both. By capping the buffered-ahead amount to ~the device's
-        # latency, onset and steady-state latency converge and one sync delay
-        # works everywhere. `buffered_until` tracks the wall-clock time up to
-        # which audio has been queued.
-        BYTES_PER_SEC = 24000 * 2  # PCM16 mono @ 24 kHz
-        target_lead = min(0.5, max(0.12, self.output_latency_ms / 1000.0))
-        buffered_until = loop.time()
+            while self.is_active:
+                audio_data, overflowed = await loop.run_in_executor(
+                    executor, stream.read, chunk_size
+                )
+                if overflowed:
+                    logger.warning("Microphone input overflowed")
+
+                # Always drain the physical input stream, including while Sunny
+                # speaks, so stale DJI/PortAudio audio cannot accumulate. Only
+                # forwarding to OpenAI is paused during playback and its tail.
+                if self._input_audio_is_suppressed():
+                    continue
+                await self._send_audio_chunk_raw(bytes(audio_data))
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.is_active = False
+            logger.error("Error capturing audio: %s", exc)
+        finally:
+            if stream is not None:
+                try:
+                    stream.abort()
+                except Exception:
+                    pass
+            executor.shutdown(wait=True, cancel_futures=True)
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+            logger.info("Audio capture stopped")
+
+    async def play_audio(self) -> None:
+        """Play streamed 24 kHz PCM16 audio with sounddevice."""
+        import sounddevice as sd
+        from concurrent.futures import ThreadPoolExecutor
+
+        sample_rate = 24000
+        write_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="oai_audio_wr")
+        cb_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="oai_audio_cb")
+        callback_future = None
+        stream = None
+        loop = asyncio.get_running_loop()
 
         try:
+            stream, device_index = self._open_sounddevice_stream(
+                sd,
+                sd.RawOutputStream,
+                self.output_device_index,
+                "output",
+                samplerate=sample_rate,
+                blocksize=0,
+                channels=1,
+                dtype="int16",
+                latency="low",
+            )
+
+            try:
+                est_ms = float(stream.latency) * 1000
+                self.output_latency_ms = int(round(max(20.0, min(est_ms, 400.0))))
+            except (TypeError, ValueError):
+                self.output_latency_ms = 0
+
+            logger.info(
+                "🔊 Audio playback started (24kHz, mono, PCM16, device=%s, output_latency=%sms)",
+                device_index,
+                self.output_latency_ms,
+            )
+
+            bytes_per_second = sample_rate * 2  # PCM16 mono
+            target_lead = min(0.5, max(0.12, self.output_latency_ms / 1000.0))
+            buffered_until = loop.time()
+
             while self.is_active:
+                if self._playback_interrupted:
+                    # Drop audio already buffered locally so the user does not
+                    # have to talk over the remainder of Sunny's response.
+                    await loop.run_in_executor(write_executor, stream.abort)
+                    await loop.run_in_executor(write_executor, stream.start)
+                    buffered_until = loop.time()
+                    self._playback_interrupted = False
+                    self._assistant_playback_active = False
+                    self._assistant_audio_done = True
+                    logger.info("⏹️ Assistant playback interrupted by user speech")
+
                 try:
                     audio_data = await asyncio.wait_for(
                         self._audio_queue.get(), timeout=0.1
                     )
                 except asyncio.TimeoutError:
+                    # Reopen the microphone only after OpenAI has finished the
+                    # audio item, all queued PCM has been written, and the
+                    # device's output buffer should no longer be audible.
+                    audible_until = buffered_until + self.output_latency_ms / 1000.0
+                    if (
+                        self._assistant_playback_active
+                        and self._assistant_audio_done
+                        and self._audio_queue.empty()
+                        and loop.time() >= audible_until
+                    ):
+                        self._assistant_playback_active = False
+                        if self.barge_in_enabled:
+                            self._mic_suppressed_until = 0.0
+                            logger.debug("Assistant playback ended; barge-in remained active")
+                        else:
+                            self._mic_suppressed_until = (
+                                loop.time() + self.acoustic_tail_ms / 1000.0
+                            )
+                            logger.info(
+                                "🎤 Assistant playback ended; microphone forwarding resumes in %sms",
+                                self.acoustic_tail_ms,
+                            )
                     continue
 
-                # Write in ~40ms slices so the mouth-animation callback is
-                # time-aligned to playback (one viseme per whole chunk would be
-                # end-of-chunk biased). 1920 bytes = 40ms of 24kHz PCM16 mono.
-                SLICE_BYTES = 1920
-                for i in range(0, len(audio_data), SLICE_BYTES):
-                    if not self.is_active:
-                        break
-                    slice_bytes = audio_data[i:i + SLICE_BYTES]
+                await self._begin_assistant_playback()
 
-                    # Pace: never queue more than `target_lead` seconds ahead of
-                    # real playback. Reset the cursor if the buffer has drained
-                    # (gap between utterances) so we don't stall on fresh audio.
+                # Write ~40 ms slices so animation callbacks stay aligned with
+                # audible playback instead of firing once per large API chunk.
+                slice_bytes_count = 1920
+                for offset in range(0, len(audio_data), slice_bytes_count):
+                    if not self.is_active or self._playback_interrupted:
+                        break
+                    slice_bytes = audio_data[offset:offset + slice_bytes_count]
+
                     now = loop.time()
                     if buffered_until < now:
                         buffered_until = now
@@ -625,20 +786,41 @@ class OpenAIRealtimeClient:
                     if ahead > target_lead:
                         await asyncio.sleep(ahead - target_lead)
 
-                    # Write audio to speaker in dedicated thread (non-blocking to event loop)
                     await loop.run_in_executor(write_executor, stream.write, slice_bytes)
-                    buffered_until += len(slice_bytes) / BYTES_PER_SEC
-                    # Mouth animation callback in separate thread pool (non-blocking)
-                    loop.run_in_executor(cb_executor, self._safe_audio_callback, slice_bytes)
+                    buffered_until += len(slice_bytes) / bytes_per_second
 
-        except Exception as e:
-            logger.error(f"Error playing audio: {e}")
+                    # Animation is disposable: retain at most one callback so
+                    # slow analysis cannot build an unbounded shutdown backlog.
+                    if callback_future is None or callback_future.done():
+                        callback_future = loop.run_in_executor(
+                            cb_executor, self._safe_audio_callback, slice_bytes
+                        )
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.is_active = False
+            logger.error("Error playing audio: %s", exc)
         finally:
-            stream.stop_stream()
-            stream.close()
-            p.terminate()
-            write_executor.shutdown(wait=False)
-            cb_executor.shutdown(wait=False)
+            self._assistant_playback_active = False
+            self._assistant_audio_done = True
+            self._mic_suppressed_until = 0.0
+            self._playback_interrupted = False
+            self._discard_assistant_audio = False
+            if stream is not None:
+                try:
+                    stream.abort()
+                except Exception:
+                    pass
+            write_executor.shutdown(wait=True, cancel_futures=True)
+            if callback_future is not None and not callback_future.done():
+                callback_future.cancel()
+            cb_executor.shutdown(wait=False, cancel_futures=True)
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
             logger.info("Audio playback stopped")
 
     async def _process_server_events(self) -> None:
@@ -667,11 +849,23 @@ class OpenAIRealtimeClient:
                 event_type = event.get("type", "")
 
                 if event_type in ("response.audio.delta", "response.output_audio.delta"):
-                    # Decode base64 audio to PCM16 bytes
+                    # After a barge-in, ignore late deltas from the interrupted
+                    # response until its response.done event arrives.
+                    if self._discard_assistant_audio:
+                        continue
+
+                    # Decode base64 audio to PCM16 bytes. Mark generation active
+                    # when the delta arrives so an early done event cannot be
+                    # overwritten when local playback begins later.
+                    self._assistant_audio_done = False
                     audio_b64 = event.get("delta", "")
                     if audio_b64:
                         audio_bytes = base64.b64decode(audio_b64)
                         await self._audio_queue.put(audio_bytes)
+
+                elif event_type in ("response.audio.done", "response.output_audio.done"):
+                    self._assistant_audio_done = True
+                    logger.debug("OpenAI Realtime assistant audio generation completed")
 
                 elif event_type in ("response.audio_transcript.done", "response.output_audio_transcript.done"):
                     transcript = event.get("transcript", "")
@@ -682,6 +876,32 @@ class OpenAIRealtimeClient:
                     transcript = event.get("transcript", "")
                     if transcript and self.on_user_text:
                         self.on_user_text(transcript)
+
+                elif event_type == "input_audio_buffer.speech_started":
+                    logger.info(
+                        "🎙️ OpenAI VAD speech started (item=%s, audio_start_ms=%s)",
+                        event.get("item_id", "unknown"),
+                        event.get("audio_start_ms", "unknown"),
+                    )
+                    if self.barge_in_enabled and self._assistant_playback_active:
+                        self._playback_interrupted = True
+                        self._discard_assistant_audio = True
+                        while not self._audio_queue.empty():
+                            try:
+                                self._audio_queue.get_nowait()
+                            except asyncio.QueueEmpty:
+                                break
+                        logger.info("🗣️ Barge-in detected; stopping assistant audio")
+
+                elif event_type == "input_audio_buffer.speech_stopped":
+                    logger.info(
+                        "🎙️ OpenAI VAD speech stopped (item=%s, audio_end_ms=%s)",
+                        event.get("item_id", "unknown"),
+                        event.get("audio_end_ms", "unknown"),
+                    )
+
+                elif event_type == "input_audio_buffer.cleared":
+                    logger.debug("OpenAI pending microphone buffer cleared")
 
                 elif event_type == "response.function_call_arguments.done":
                     name = event.get("name", "")
@@ -727,6 +947,11 @@ class OpenAIRealtimeClient:
                     logger.info("OpenAI Realtime session configuration updated")
 
                 elif event_type == "response.done":
+                    # Current GA/preview servers emit a dedicated audio-done
+                    # event first. This is a safe fallback for older variants.
+                    if self._assistant_playback_active:
+                        self._assistant_audio_done = True
+                    self._discard_assistant_audio = False
                     logger.debug("OpenAI Realtime response completed")
 
                 else:

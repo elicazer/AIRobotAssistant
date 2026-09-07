@@ -6,9 +6,13 @@ __pycache__/
 # C extensions
 *.so
 
+# PII
+config/face_database.json
+
 # Distribution / packaging
 .Python
 build/
+tmp/
 develop-eggs/
 dist/
 downloads/
