@@ -1,0 +1,1267 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sunny · Control Center</title>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+        "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3.1.4/lib/three-vrm.module.min.js"
+      }
+    }
+    </script>
+    <style>
+        :root {
+            --bg: #0e1016;
+            --panel: #171a23;
+            --panel-2: #1e222d;
+            --edge: #2a2f3c;
+            --ink: #eef1f6;
+            --muted: #98a2b3;
+            --accent: #5b8cff;
+            --ok: #3ecf8e;
+            --warn: #ffb347;
+            --danger: #ff5470;
+            /* Strong custom curves (Emil Kowalski): built-in easings are too weak. */
+            --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+            --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            background: radial-gradient(1200px 800px at 20% -10%, #1a2030 0%, var(--bg) 55%);
+            color: var(--ink);
+            min-height: 100vh;
+        }
+
+        header.topbar {
+            position: sticky;
+            top: 0;
+            z-index: 20;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 12px 18px;
+            background: rgba(12, 14, 20, 0.85);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid var(--edge);
+            flex-wrap: wrap;
+        }
+
+        .brand {
+            font-weight: 700;
+            font-size: 17px;
+            letter-spacing: 0.2px;
+        }
+
+        .brand .dot {
+            color: var(--accent);
+        }
+
+        .grow {
+            flex: 1;
+        }
+
+        .conn {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 13px;
+            color: var(--muted);
+        }
+
+        .conn .led {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: var(--danger);
+            box-shadow: 0 0 8px var(--danger);
+        }
+
+        .conn.on .led {
+            background: var(--ok);
+            box-shadow: 0 0 8px var(--ok);
+        }
+
+        button {
+            font: inherit;
+            cursor: pointer;
+            color: var(--ink);
+            background: var(--panel-2);
+            border: 1px solid var(--edge);
+            border-radius: 10px;
+            padding: 9px 14px;
+            transition: transform 160ms var(--ease-out), background 150ms, border-color 150ms;
+        }
+
+        @media (hover: hover) and (pointer: fine) {
+            button:hover {
+                border-color: #3a4a63;
+            }
+        }
+
+        /* Instant press feedback — the UI confirms it heard the user. */
+        button:active {
+            transform: scale(0.97);
+        }
+
+        button:disabled {
+            opacity: .45;
+            cursor: not-allowed;
+        }
+
+        button:focus-visible,
+        select:focus-visible,
+        input:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+
+        .btn-primary {
+            background: #24406e;
+            border-color: #35528a;
+        }
+
+        .btn-primary.live {
+            background: var(--danger);
+            border-color: var(--danger);
+        }
+
+        .btn-ghost {
+            background: transparent;
+        }
+
+        main {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 18px;
+            display: grid;
+            gap: 16px;
+            grid-template-columns: minmax(360px, 5fr) minmax(360px, 7fr);
+        }
+
+        @media (max-width: 900px) {
+            main {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: var(--panel);
+            border: 1px solid var(--edge);
+            border-radius: 16px;
+            padding: 16px;
+            min-width: 0;
+        }
+
+        .card h2 {
+            margin: 0 0 12px;
+            font-size: 14px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: .08em;
+            font-weight: 600;
+        }
+
+        #avatar-canvas-wrap {
+            position: relative;
+            width: 100%;
+            height: 420px;
+            border-radius: 12px;
+            overflow: hidden;
+            background: #202436;
+        }
+
+        #avatar-canvas-wrap canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        #emotion-label {
+            position: absolute;
+            top: 14px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-6px);
+            background: rgba(0, 0, 0, .55);
+            color: #fff;
+            padding: 6px 16px;
+            border-radius: 999px;
+            font-size: 18px;
+            font-weight: 700;
+            opacity: 0;
+            transition: opacity .18s, transform .18s;
+            pointer-events: none;
+        }
+
+        #emotion-label.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .cam-preview {
+            margin-top: 12px;
+        }
+
+        #cam-preview {
+            display: block;
+            width: 100%;
+            max-height: 200px;
+            object-fit: cover;
+            border-radius: 10px;
+            background: #0b0d12;
+            border: 1px solid var(--edge);
+        }
+
+        .cam-caption {
+            color: var(--muted);
+            font-size: 11.5px;
+            margin-top: 5px;
+            text-align: center;
+        }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            background: var(--panel-2);
+            border: 1px solid var(--edge);
+            border-radius: 999px;
+            padding: 7px 12px;
+            font-size: 13px;
+            color: var(--ink);
+        }
+
+        .chip .k {
+            color: var(--muted);
+        }
+
+        .chip .led {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--muted);
+        }
+
+        .chip.on .led {
+            background: var(--ok);
+            box-shadow: 0 0 7px var(--ok);
+        }
+
+        .chip.speaking .led {
+            background: var(--accent);
+            box-shadow: 0 0 7px var(--accent);
+        }
+
+        /* Chat */
+        .chat-card {
+            display: flex;
+            flex-direction: column;
+            height: 494px;
+        }
+
+        #chat {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding-right: 6px;
+        }
+
+        .msg {
+            max-width: 82%;
+            padding: 10px 13px;
+            border-radius: 14px;
+            font-size: 14.5px;
+            line-height: 1.35;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .msg.user {
+            align-self: flex-end;
+            background: #24406e;
+            border-bottom-right-radius: 4px;
+        }
+
+        .msg.assistant {
+            align-self: flex-start;
+            background: var(--panel-2);
+            border: 1px solid var(--edge);
+            border-bottom-left-radius: 4px;
+        }
+
+        .msg .who {
+            display: block;
+            font-size: 11px;
+            color: var(--muted);
+            margin-bottom: 3px;
+        }
+
+        .chat-empty {
+            color: var(--muted);
+            font-size: 14px;
+            text-align: center;
+            margin: auto;
+        }
+
+        .speaking-row {
+            min-height: 20px;
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .typing {
+            display: inline-flex;
+            gap: 3px;
+        }
+
+        .typing i {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent);
+            animation: blink 1s infinite;
+        }
+
+        .typing i:nth-child(2) {
+            animation-delay: .2s;
+        }
+
+        .typing i:nth-child(3) {
+            animation-delay: .4s;
+        }
+
+        @keyframes blink {
+
+            0%,
+            60%,
+            100% {
+                opacity: .25;
+            }
+
+            30% {
+                opacity: 1;
+            }
+        }
+
+        /* People */
+        .people-card {
+            grid-column: 1 / -1;
+        }
+
+        .people-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 10px;
+        }
+
+        .person {
+            background: var(--panel-2);
+            border: 1px solid var(--edge);
+            border-radius: 12px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .person.current {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 1px var(--accent);
+        }
+
+        .person .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #3a4b7a, #5b8cff);
+            display: grid;
+            place-items: center;
+            font-weight: 700;
+            font-size: 17px;
+            color: #fff;
+            margin-bottom: 4px;
+        }
+
+        .person .name {
+            font-weight: 600;
+        }
+
+        .person .meta {
+            font-size: 11.5px;
+            color: var(--muted);
+        }
+
+        .person .rm {
+            margin-top: 6px;
+            font-size: 12px;
+            padding: 5px 8px;
+            background: transparent;
+            border-color: #5a2a38;
+            color: #ff9db0;
+        }
+
+        .enroll-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+
+        .enroll-row input {
+            flex: 1;
+            min-width: 160px;
+            background: #12151d;
+            border: 1px solid var(--edge);
+            color: var(--ink);
+            border-radius: 10px;
+            padding: 9px 12px;
+        }
+
+        /* Settings drawer */
+        select,
+        .drawer input {
+            background: #12151d;
+            color: var(--ink);
+            border: 1px solid var(--edge);
+            border-radius: 10px;
+            padding: 8px 10px;
+            font: inherit;
+        }
+
+        .drawer {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            width: 100%;
+            /* Animate open/close via max-height + opacity (transform/opacity-ish,
+               interruptible). display:none can't transition, so we collapse it. */
+            max-height: 0;
+            opacity: 0;
+            overflow: hidden;
+            padding-top: 0;
+            transition: max-height 260ms var(--ease-out), opacity 200ms var(--ease-out), padding-top 260ms var(--ease-out);
+        }
+
+        .drawer.open {
+            max-height: 320px;
+            opacity: 1;
+            padding-top: 12px;
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .field select {
+            min-width: 170px;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 18px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #222836;
+            border: 1px solid var(--edge);
+            color: var(--ink);
+            padding: 10px 16px;
+            border-radius: 10px;
+            font-size: 14px;
+            opacity: 0;
+            transform: translateX(-50%) translateY(10px);
+            transition: opacity 200ms var(--ease-out), transform 240ms var(--ease-out);
+            pointer-events: none;
+            z-index: 50;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        /* --- Demo mode --- */
+        .demo-card {
+            grid-column: 1 / -1;
+        }
+
+        .demo-hint {
+            color: var(--muted);
+            font-size: 12.5px;
+            margin-bottom: 12px;
+        }
+
+        .demo-group {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+
+        .demo-label {
+            min-width: 92px;
+            font-size: 11px;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            color: var(--muted);
+            font-weight: 600;
+        }
+
+        .demo-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .demo-row button {
+            padding: 10px 14px;
+            font-size: 14px;
+        }
+
+        #btn-demo.on {
+            background: #2b4a3c;
+            border-color: #3e7a5f;
+        }
+
+        /* --- Entrance motion (transform + opacity only, sub-300ms, ease-out) --- */
+        @keyframes riseIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px) scale(0.99);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        @keyframes msgIn {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        main>.card {
+            animation: riseIn 320ms var(--ease-out) both;
+        }
+
+        main>.card:nth-child(1) {
+            animation-delay: 0ms;
+        }
+
+        main>.card:nth-child(2) {
+            animation-delay: 55ms;
+        }
+
+        main>.card:nth-child(3) {
+            animation-delay: 110ms;
+        }
+
+        .msg {
+            animation: msgIn 220ms var(--ease-out) both;
+        }
+
+        .person {
+            animation: msgIn 260ms var(--ease-out) both;
+        }
+
+        .person:nth-child(1) {
+            animation-delay: 0ms;
+        }
+
+        .person:nth-child(2) {
+            animation-delay: 45ms;
+        }
+
+        .person:nth-child(3) {
+            animation-delay: 90ms;
+        }
+
+        .person:nth-child(4) {
+            animation-delay: 135ms;
+        }
+
+        .person:nth-child(5) {
+            animation-delay: 180ms;
+        }
+
+        .person:nth-child(n+6) {
+            animation-delay: 220ms;
+        }
+
+        /* Respect reduced motion: keep fades, drop movement. */
+        @media (prefers-reduced-motion: reduce) {
+
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.001ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 120ms !important;
+            }
+
+            main>.card,
+            .msg,
+            .person {
+                animation: none;
+            }
+
+            button:active {
+                transform: none;
+            }
+
+            .toast {
+                transform: translateX(-50%);
+            }
+
+            .toast.show {
+                transform: translateX(-50%);
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <header class="topbar">
+        <span class="brand">Sunny <span class="dot">●</span> Control Center</span>
+        <span class="conn" id="conn"><span class="led"></span><span id="conn-text">connecting…</span></span>
+        <span class="grow"></span>
+        <button class="btn-primary" id="btn-start" onclick="toggleConversation()">▶️ Start</button>
+        <button id="btn-mute" onclick="toggleMute()">🔊 Mute</button>
+        <button id="btn-demo" onclick="toggleDemo()" title="Show quick demo controls for presenting">🎪 Demo</button>
+        <button class="btn-ghost" onclick="toggleDrawer()">⚙️ Settings</button>
+        <div class="drawer" id="drawer">
+            <label class="field">Personality
+                <select id="personality-select"></select>
+            </label>
+            <label class="field">Voice model
+                <select id="voice-model-select"></select>
+            </label>
+            <label class="field">Voice
+                <select id="voice-select"></select>
+            </label>
+            <label class="field">Microphone
+                <select id="microphone-select"></select>
+            </label>
+            <label class="field">Speaker
+                <select id="speaker-select"></select>
+            </label>
+            <label class="field">Camera
+                <select id="camera-select"></select>
+            </label>
+            <label class="field">&nbsp;
+                <button onclick="loadDevices()">🔄 Refresh devices</button>
+            </label>
+            <label class="field" style="justify-content:flex-end;">
+                <span><input type="checkbox" id="recognition-toggle" onchange="toggleRecognition()"> Face
+                    recognition</span>
+            </label>
+        </div>
+    </header>
+
+    <main>
+        <section class="card demo-card" id="demo-card" hidden>
+            <h2>Demo Mode</h2>
+            <div class="demo-hint">Tap to show a feature instantly. Great for a quick walkthrough at the booth.</div>
+            <div class="demo-group">
+                <span class="demo-label">Personality</span>
+                <div class="demo-row" id="personality-row"></div>
+            </div>
+            <div class="demo-group">
+                <span class="demo-label">Expressions</span>
+                <div class="demo-row">
+                    <button onclick="demo('demo_expression','happy')">🙂 Happy</button>
+                    <button onclick="demo('demo_expression','sad')">🙁 Sad</button>
+                    <button onclick="demo('demo_expression','angry')">😠 Angry</button>
+                    <button onclick="demo('demo_expression','surprised')">😮 Surprised</button>
+                    <button onclick="demo('demo_expression','relaxed')">😌 Calm</button>
+                    <button onclick="demo('demo_expression','neutral')">😐 Neutral</button>
+                </div>
+            </div>
+            <div class="demo-group">
+                <span class="demo-label">Eyes</span>
+                <div class="demo-row">
+                    <button onclick="demo('demo_gaze','left')">⬅️ Look left</button>
+                    <button onclick="demo('demo_gaze','center')">🎯 Forward</button>
+                    <button onclick="demo('demo_gaze','right')">➡️ Look right</button>
+                    <button onclick="demo('demo_gaze','up')">⬆️ Up</button>
+                    <button onclick="demo('demo_gaze','down')">⬇️ Down</button>
+                    <button onclick="demo('demo_blink')">😉 Blink</button>
+                </div>
+            </div>
+            <div class="demo-group">
+                <span class="demo-label">Mouth</span>
+                <div class="demo-row">
+                    <button onclick="demo('demo_viseme','AI')">“Ah”</button>
+                    <button onclick="demo('demo_viseme','O')">“Oh”</button>
+                    <button onclick="demo('demo_viseme','E')">“Eee”</button>
+                    <button onclick="demo('demo_viseme','MBP')">Closed</button>
+                    <button onclick="demo('demo_viseme','rest')">Rest</button>
+                </div>
+            </div>
+            <div class="demo-group">
+                <span class="demo-label">Visitor</span>
+                <div class="demo-row">
+                    <button class="btn-primary" onclick="newVisitor()">🔄 New visitor (reset)</button>
+                    <button onclick="document.getElementById('enroll-name').focus()">➕ Enroll someone</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Avatar</h2>
+            <div id="avatar-canvas-wrap">
+                <div id="emotion-label"></div>
+            </div>
+            <div class="chips">
+                <span class="chip" id="chip-person"><span class="k">Person</span> <b id="person-name">—</b></span>
+                <span class="chip" id="chip-emotion"><span class="k">Mood</span> <b id="emotion-name">—</b></span>
+                <span class="chip" id="chip-speaking"><span class="led"></span><span
+                        id="speaking-text">Idle</span></span>
+                <span class="chip" id="chip-track"><span class="led"></span><span id="track-text">Camera</span></span>
+            </div>
+            <div class="cam-preview">
+                <img id="cam-preview" alt="Camera preview" />
+                <div class="cam-caption">Camera view — green circle marks the detected face</div>
+            </div>
+        </section>
+
+        <section class="card chat-card">
+            <h2>Conversation</h2>
+            <div id="chat">
+                <div class="chat-empty" id="chat-empty">No messages yet. Click Start and say hello 👋</div>
+            </div>
+            <div class="speaking-row" id="speaking-row"></div>
+        </section>
+
+        <section class="card people-card">
+            <h2>People I Know</h2>
+            <div class="enroll-row">
+                <input id="enroll-name" placeholder="Enroll the person in front of the camera — enter a name" />
+                <button onclick="enrollPerson()">➕ Enroll</button>
+                <button class="btn-ghost" onclick="loadPeople()">🔄 Refresh</button>
+            </div>
+            <div class="people-grid" id="people-grid"></div>
+        </section>
+    </main>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        const socket = io();
+
+        // ---------- Provider voices ----------
+        const voiceOptionsByProvider = {
+            openai_realtime: [
+                { value: 'alloy', label: 'Alloy' }, { value: 'ash', label: 'Ash' },
+                { value: 'ballad', label: 'Ballad' }, { value: 'cedar', label: 'Cedar (recommended)' },
+                { value: 'coral', label: 'Coral' }, { value: 'echo', label: 'Echo' },
+                { value: 'marin', label: 'Marin (recommended)' }, { value: 'sage', label: 'Sage' },
+                { value: 'shimmer', label: 'Shimmer' }, { value: 'verse', label: 'Verse' },
+            ],
+            nova_sonic: [
+                { value: 'matthew', label: 'Matthew (US M)' }, { value: 'tiffany', label: 'Tiffany (US F)' },
+                { value: 'amy', label: 'Amy (British F)' }, { value: 'ambre', label: 'Ambre (French F)' },
+                { value: 'florian', label: 'Florian (French M)' }, { value: 'beatrice', label: 'Beatrice (Italian F)' },
+                { value: 'lorenzo', label: 'Lorenzo (Italian M)' }, { value: 'greta', label: 'Greta (German F)' },
+                { value: 'lennart', label: 'Lennart (German M)' }, { value: 'lupe', label: 'Lupe (Spanish F)' },
+            ],
+        };
+        const selectedVoiceByProvider = { openai_realtime: 'marin', nova_sonic: 'matthew' };
+
+        function renderVoiceOptions(provider) {
+            const list = voiceOptionsByProvider[provider] || voiceOptionsByProvider.openai_realtime;
+            const sel = document.getElementById('voice-select');
+            sel.innerHTML = '';
+            list.forEach(v => {
+                const o = document.createElement('option');
+                o.value = v.value; o.textContent = v.label;
+                if (v.value === selectedVoiceByProvider[provider]) o.selected = true;
+                sel.appendChild(o);
+            });
+        }
+
+        // ---------- Toast ----------
+        let toastTimer = null;
+        function toast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg; t.classList.add('show');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+        }
+
+        // ---------- Connection ----------
+        socket.on('connect', () => {
+            const c = document.getElementById('conn');
+            c.classList.add('on'); document.getElementById('conn-text').textContent = 'connected';
+        });
+        socket.on('disconnect', () => {
+            const c = document.getElementById('conn');
+            c.classList.remove('on'); document.getElementById('conn-text').textContent = 'disconnected';
+        });
+
+        // ---------- Controls ----------
+        let isListening = false, isMuted = false;
+        function toggleConversation() {
+            isListening = !isListening;
+            socket.emit('control', { action: isListening ? 'start' : 'stop' });
+            const b = document.getElementById('btn-start');
+            b.textContent = isListening ? '⏹️ Stop' : '▶️ Start';
+            b.classList.toggle('live', isListening);
+            if (!isListening) setSpeaking(false);
+        }
+        function toggleMute() {
+            isMuted = !isMuted;
+            socket.emit('control', { action: 'mute', value: isMuted });
+            document.getElementById('btn-mute').textContent = isMuted ? '🔇 Unmute' : '🔊 Mute';
+        }
+        function toggleDrawer() { document.getElementById('drawer').classList.toggle('open'); }
+
+        // ---------- Demo mode ----------
+        const DEMO_KEY = 'demoMode';
+        function setDemo(on) {
+            const card = document.getElementById('demo-card');
+            const btn = document.getElementById('btn-demo');
+            card.hidden = !on;
+            btn.classList.toggle('on', on);
+            localStorage.setItem(DEMO_KEY, String(!!on));
+        }
+        function toggleDemo() { setDemo(document.getElementById('demo-card').hidden); }
+        function demo(action, value) {
+            socket.emit('control', value === undefined ? { action } : { action, value });
+        }
+        function newVisitor() {
+            socket.emit('control', { action: 'demo_reset' });
+            chatEl.innerHTML = '<div class="chat-empty" id="chat-empty">Ready for the next visitor 👋</div>';
+            document.getElementById('emotion-name').textContent = '—';
+            toast('Reset — ready for the next visitor');
+        }
+        // Restore demo mode across reloads (handy at a booth).
+        setDemo(localStorage.getItem(DEMO_KEY) === 'true');
+
+        // ---------- Personality ----------
+        let personalities = [], currentPersonality = 'therapist';
+        function renderPersonality() {
+            const sel = document.getElementById('personality-select');
+            sel.innerHTML = '';
+            personalities.forEach(p => {
+                const o = document.createElement('option');
+                o.value = p.id; o.textContent = p.label;
+                if (p.id === currentPersonality) o.selected = true;
+                sel.appendChild(o);
+            });
+            // Quick-switch buttons in the demo panel
+            const row = document.getElementById('personality-row');
+            row.innerHTML = '';
+            personalities.forEach(p => {
+                const b = document.createElement('button');
+                b.textContent = p.label.split(' (')[0];
+                b.title = p.label;
+                b.className = (p.id === currentPersonality ? 'btn-primary' : '');
+                b.onclick = () => setPersonality(p.id);
+                row.appendChild(b);
+            });
+        }
+        function setPersonality(id) {
+            currentPersonality = id;
+            socket.emit('control', { action: 'set_personality', value: id });
+            renderPersonality();
+            const label = (personalities.find(p => p.id === id) || {}).label || id;
+            toast(`Personality: ${label} — applies on next Start`);
+        }
+        document.getElementById('personality-select').addEventListener('change', (e) => setPersonality(e.target.value));
+        socket.on('personality_status', (d) => {
+            if (d && d.personality) { currentPersonality = d.personality; renderPersonality(); }
+        });
+
+        // ---------- Chat transcript ----------
+        const chatEl = document.getElementById('chat');
+        function addMessage(role, text) {
+            const empty = document.getElementById('chat-empty');
+            if (empty) empty.remove();
+            const div = document.createElement('div');
+            div.className = 'msg ' + (role === 'user' ? 'user' : 'assistant');
+            div.innerHTML = `<span class="who">${role === 'user' ? 'You' : 'Sunny'}</span>`;
+            div.appendChild(document.createTextNode(text));
+            chatEl.appendChild(div);
+            chatEl.scrollTop = chatEl.scrollHeight;
+        }
+        socket.on('user_text', (d) => { if (d && d.text) addMessage('user', d.text); });
+        socket.on('assistant_text', (d) => { if (d && d.text) { addMessage('assistant', d.text); setSpeaking(true); } });
+
+        // ---------- Speaking indicator ----------
+        let speakingTimer = null;
+        function setSpeaking(on) {
+            const chip = document.getElementById('chip-speaking');
+            const row = document.getElementById('speaking-row');
+            if (on) {
+                chip.classList.add('speaking'); document.getElementById('speaking-text').textContent = 'Speaking';
+                row.innerHTML = 'Sunny is speaking <span class="typing"><i></i><i></i><i></i></span>';
+                clearTimeout(speakingTimer);
+                speakingTimer = setTimeout(() => setSpeaking(false), 600);
+            } else {
+                chip.classList.remove('speaking'); document.getElementById('speaking-text').textContent = 'Idle';
+                row.textContent = '';
+            }
+        }
+
+        // ---------- Identity + emotion ----------
+        let currentPerson = null;
+        socket.on('identity_update', (d) => {
+            currentPerson = d && d.person_name ? d.person_name : null;
+            const el = document.getElementById('person-name');
+            const chip = document.getElementById('chip-person');
+            el.textContent = currentPerson || 'Unknown';
+            chip.classList.toggle('on', !!currentPerson);
+            markCurrentPerson();
+        });
+        const EMO = { happy: 'Happy 🙂', sad: 'Sad 🙁', angry: 'Angry 😠', relaxed: 'Calm 😌', neutral: 'Neutral 😐', surprised: 'Surprised 😮', fear: 'Fearful 😨', disgust: 'Disgust 😖' };
+        socket.on('emotion_update', (d) => {
+            const e = d && d.emotion ? d.emotion : 'neutral';
+            document.getElementById('emotion-name').textContent = EMO[e] || e;
+        });
+
+        socket.on('face_tracking_status', (d) => {
+            const chip = document.getElementById('chip-track');
+            const on = d && d.enabled;
+            chip.classList.toggle('on', !!on);
+            document.getElementById('track-text').textContent = on ? 'Tracking' : 'Camera off';
+        });
+
+        // ---------- People ----------
+        function initials(name) { return (name || '?').trim().slice(0, 2).toUpperCase(); }
+        function timeAgo(iso) {
+            if (!iso) return '';
+            const t = Date.parse(iso); if (!Number.isFinite(t)) return '';
+            const s = Math.max(0, (Date.now() - t) / 1000);
+            if (s < 60) return 'just now';
+            if (s < 3600) return Math.floor(s / 60) + 'm ago';
+            if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+            return Math.floor(s / 86400) + 'd ago';
+        }
+        let peopleCache = [];
+        async function loadPeople() {
+            try {
+                const r = await fetch('/api/people');
+                const d = await r.json();
+                peopleCache = d.people || [];
+                renderPeople();
+            } catch (e) { console.error('people load', e); }
+        }
+        function renderPeople() {
+            const grid = document.getElementById('people-grid');
+            grid.innerHTML = '';
+            if (!peopleCache.length) {
+                grid.innerHTML = '<div class="chat-empty" style="grid-column:1/-1;">No one enrolled yet. Enter a name above and click Enroll.</div>';
+                return;
+            }
+            peopleCache.forEach(p => {
+                const card = document.createElement('div');
+                card.className = 'person' + (p.name === currentPerson ? ' current' : '');
+                card.dataset.name = p.name;
+                card.innerHTML = `
+                    <div class="avatar">${initials(p.name)}</div>
+                    <div class="name">${p.name}</div>
+                    <div class="meta">Seen ${timeAgo(p.last_seen) || '—'}</div>
+                    <div class="meta">${p.captures || 0} face captures</div>
+                    <button class="rm">Remove</button>`;
+                card.querySelector('.rm').addEventListener('click', () => removePerson(p.name));
+                grid.appendChild(card);
+            });
+        }
+        function markCurrentPerson() {
+            document.querySelectorAll('.person').forEach(el => {
+                el.classList.toggle('current', el.dataset.name === currentPerson);
+            });
+        }
+        function enrollPerson() {
+            const input = document.getElementById('enroll-name');
+            const name = input.value.trim();
+            if (!name) { toast('Enter a name first'); return; }
+            toast(`Enrolling ${name}… look at the camera`);
+            socket.emit('enroll', { name });
+            input.value = '';
+        }
+        function removePerson(name) {
+            if (!confirm(`Remove ${name} and forget their face?`)) return;
+            socket.emit('remove_person', { name });
+        }
+        function toggleRecognition() {
+            const on = document.getElementById('recognition-toggle').checked;
+            socket.emit('toggle_recognition', { enabled: on });
+        }
+        socket.on('enroll_result', (d) => { toast(d.message || (d.success ? 'Enrolled' : 'Enroll failed')); loadPeople(); });
+        socket.on('remove_result', (d) => { toast(d.message || 'Removed'); loadPeople(); });
+        socket.on('recognition_status', (d) => { document.getElementById('recognition-toggle').checked = !!(d && d.enabled); });
+        socket.on('enrolled_list', () => loadPeople());
+
+        // ---------- Devices + settings ----------
+        async function loadDevices() {
+            try {
+                const s = await (await fetch('/api/settings')).json();
+                const devices = await (await fetch('/api/devices')).json();
+
+                selectedVoiceByProvider.openai_realtime = s.openai_voice_id || 'marin';
+                selectedVoiceByProvider.nova_sonic = s.voice_id || 'matthew';
+                const vm = document.getElementById('voice-model-select');
+                vm.innerHTML = '<option value="openai_realtime">OpenAI Realtime</option><option value="nova_sonic">Nova Sonic (AWS)</option>';
+                vm.value = s.voice_model || 'openai_realtime';
+                renderVoiceOptions(vm.value);
+
+                const mic = document.getElementById('microphone-select');
+                mic.innerHTML = '';
+                (devices.microphones || []).forEach((m, i) => {
+                    const o = document.createElement('option'); o.value = m.index; o.textContent = m.name;
+                    if (s.microphone_index != null ? m.index === s.microphone_index : i === 0) o.selected = true;
+                    mic.appendChild(o);
+                });
+                const spk = document.getElementById('speaker-select');
+                spk.innerHTML = '';
+                (devices.speakers || []).forEach((m, i) => {
+                    const o = document.createElement('option'); o.value = m.index; o.textContent = m.name;
+                    if (s.speaker_index != null ? m.index === s.speaker_index : i === 0) o.selected = true;
+                    spk.appendChild(o);
+                });
+
+                // Camera devices aren't enumerable via PortAudio; offer indices 0-4.
+                const cam = document.getElementById('camera-select');
+                const curCam = Number.isFinite(s.camera_index) ? s.camera_index : 0;
+                cam.innerHTML = '';
+                for (let i = 0; i <= 4; i++) {
+                    const o = document.createElement('option');
+                    o.value = i; o.textContent = 'Camera ' + i + (i === 0 ? ' (default)' : '');
+                    if (i === curCam) o.selected = true;
+                    cam.appendChild(o);
+                }
+                if (Array.isArray(s.personalities) && s.personalities.length) {
+                    personalities = s.personalities;
+                    currentPersonality = s.personality || 'therapist';
+                    renderPersonality();
+                }
+                document.getElementById('recognition-toggle').checked = !!s.face_recognition_enabled;
+            } catch (e) { console.error('devices load', e); }
+        }
+
+        document.getElementById('voice-model-select').addEventListener('change', (e) => {
+            renderVoiceOptions(e.target.value);
+            socket.emit('control', { action: 'set_voice_model', value: e.target.value });
+        });
+        document.getElementById('voice-select').addEventListener('change', (e) => {
+            const provider = document.getElementById('voice-model-select').value;
+            selectedVoiceByProvider[provider] = e.target.value;
+            socket.emit('control', { action: provider === 'openai_realtime' ? 'set_openai_voice' : 'set_voice', value: e.target.value });
+        });
+        document.getElementById('microphone-select').addEventListener('change', (e) => {
+            socket.emit('control', { action: 'set_microphone', value: parseInt(e.target.value) });
+        });
+        document.getElementById('speaker-select').addEventListener('change', (e) => {
+            socket.emit('control', { action: 'set_speaker', value: parseInt(e.target.value) });
+        });
+        document.getElementById('camera-select').addEventListener('change', (e) => {
+            socket.emit('control', { action: 'set_camera_index', value: parseInt(e.target.value) });
+            toast('Switching to Camera ' + e.target.value + '…');
+        });
+
+        // ---------- Avatar drive (viseme / gaze / emotion / blink) ----------
+        const VISEME_TO_VRM = { CLOSED: 'neutral', NARROW: 'ih', ROUNDED: 'ou', MEDIUM: 'ee', MEDIUM_OPEN: 'oh', WIDE: 'aa' };
+        const VRM_FALLBACK_WEIGHT = { CLOSED: 0, NARROW: 0.15, ROUNDED: 0.20, MEDIUM: 0.30, MEDIUM_OPEN: 0.45, WIDE: 0.65 };
+        let visemeDelayOverride = null;
+
+        socket.on('viseme_update', (data) => {
+            if (data && data.text) setSpeaking(true);
+            if (!window.avatar) return;
+            const viseme = (data && data.viseme) || 'CLOSED';
+            const apply = () => {
+                if (typeof data.vrm === 'string') {
+                    const w = Number.isFinite(data.vrm_weight) ? data.vrm_weight : (Number.isFinite(data.intensity) ? data.intensity : 1.0);
+                    window.avatar.setViseme(data.vrm, w);
+                } else {
+                    const t = VISEME_TO_VRM[viseme] || 'neutral';
+                    const w = Number.isFinite(data.intensity) ? data.intensity : (VRM_FALLBACK_WEIGHT[viseme] ?? 0);
+                    window.avatar.setViseme(t, w);
+                }
+            };
+            const serverDelay = Number.isFinite(data.sync_delay_ms) ? data.sync_delay_ms : 0;
+            const delay = visemeDelayOverride !== null ? visemeDelayOverride : serverDelay;
+            if (delay > 0) setTimeout(apply, delay); else apply();
+        });
+
+        socket.on('eye_position_update', (data) => {
+            if (!window.avatar) return;
+            if (Number.isFinite(data.gaze_x) && Number.isFinite(data.gaze_y)) {
+                window.avatar.setEye(data.gaze_x, data.gaze_y);
+            }
+        });
+
+        const emotionLabelEl = document.getElementById('emotion-label');
+        let _holdTimer = null;
+        socket.on('expression_update', (data) => {
+            if (!window.avatar) return;
+            const emotion = data.emotion || 'neutral';
+            const weight = Number.isFinite(data.weight) ? data.weight : 1.0;
+            window.avatar.setEmotion(emotion, weight);
+            if (emotion !== 'neutral' && weight > 0) {
+                emotionLabelEl.textContent = EMO[emotion] || emotion;
+                emotionLabelEl.classList.add('show');
+            } else emotionLabelEl.classList.remove('show');
+            if (_holdTimer) { clearTimeout(_holdTimer); _holdTimer = null; }
+            if (Number.isFinite(data.hold_ms) && data.hold_ms > 0) {
+                _holdTimer = setTimeout(() => { window.avatar.setEmotion('neutral', 0); emotionLabelEl.classList.remove('show'); }, data.hold_ms);
+            }
+        });
+
+        let _blinkTimer = null;
+        socket.on('blink_eyes', () => {
+            if (!window.avatar) return;
+            if (_blinkTimer) clearTimeout(_blinkTimer);
+            window.avatar.setBlink(1);
+            _blinkTimer = setTimeout(() => window.avatar.setBlink(0), 120);
+        });
+
+        // ---------- Live camera preview (poll the latest annotated frame) ----------
+        const camImg = document.getElementById('cam-preview');
+        setInterval(() => {
+            if (document.hidden) return;
+            camImg.src = '/camera.jpg?t=' + Date.now();
+        }, 350);
+
+        // ---------- Boot ----------
+        loadDevices();
+        loadPeople();
+        socket.emit('enrolled');
+    </script>
+
+    <!-- VRM avatar renderer (same engine as the classic page). Exposes window.avatar. -->
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+
+        const wrap = document.getElementById('avatar-canvas-wrap');
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+        renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        wrap.appendChild(renderer.domElement);
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x202436);
+        const camera = new THREE.PerspectiveCamera(30, wrap.clientWidth / wrap.clientHeight, 0.1, 20);
+        camera.position.set(0, 1.35, 0.62);
+        camera.lookAt(0, 1.35, 0);
+
+        const dir = new THREE.DirectionalLight(0xffffff, Math.PI);
+        dir.position.set(1, 2, 2);
+        scene.add(dir);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6 * Math.PI));
+
+        let currentVrm = null;
+        let headY = 1.35;
+        let leftEyeBone = null, rightEyeBone = null;
+        const EYE_YAW = 0.5, EYE_PITCH = 0.3;
+
+        const control = { viseme: 'neutral', visemeWeight: 0, eyeX: 0, eyeY: 0, blink: 0, emotion: 'neutral', emotionWeight: 0 };
+        const VISEMES = ['aa', 'ih', 'ou', 'ee', 'oh'];
+        const EMOTIONS = ['happy', 'angry', 'sad', 'relaxed', 'surprised'];
+        let availableExpressions = [];
+        const VISEME_GAIN = { aa: 0.45, ih: 0.30, ou: 0.90, ee: 0.50, oh: 0.80 };
+
+        window.avatar = {
+            setViseme(name, weight = 1.0) { control.viseme = name; const w = Math.max(0, Math.min(1, weight)); control.visemeWeight = w * (VISEME_GAIN[name] ?? 1); },
+            setEye(x, y) { control.eyeX = Math.max(-1, Math.min(1, x)); control.eyeY = Math.max(-1, Math.min(1, y)); },
+            setBlink(v) { control.blink = Math.max(0, Math.min(1, v)); },
+            setEmotion(name, weight = 1.0) { control.emotion = name || 'neutral'; control.emotionWeight = Math.max(0, Math.min(1, weight)); },
+            listExpressions() { return availableExpressions.slice(); }
+        };
+
+        const loader = new GLTFLoader();
+        loader.register((parser) => new VRMLoaderPlugin(parser));
+        loader.load('/avatar/model', (gltf) => {
+            const vrm = gltf.userData.vrm;
+            VRMUtils.removeUnnecessaryVertices(gltf.scene);
+            if (vrm.meta && vrm.meta.metaVersion === '0') VRMUtils.rotateVRM0(vrm);
+            scene.add(vrm.scene);
+            currentVrm = vrm;
+            if (vrm.expressionManager && Array.isArray(vrm.expressionManager.expressions)) {
+                availableExpressions = vrm.expressionManager.expressions.map((e) => e.expressionName || e.name).filter(Boolean);
+            }
+            const hum = vrm.humanoid;
+            const headNode = hum && hum.getNormalizedBoneNode ? hum.getNormalizedBoneNode('head') : null;
+            if (headNode) { const p = new THREE.Vector3(); headNode.getWorldPosition(p); headY = p.y; }
+            if (hum && hum.getNormalizedBoneNode) {
+                const lUp = hum.getNormalizedBoneNode('leftUpperArm'), rUp = hum.getNormalizedBoneNode('rightUpperArm');
+                const lLow = hum.getNormalizedBoneNode('leftLowerArm'), rLow = hum.getNormalizedBoneNode('rightLowerArm');
+                if (lUp) lUp.rotation.z = 1.4; if (rUp) rUp.rotation.z = -1.4;
+                if (lLow) lLow.rotation.z = 0.15; if (rLow) rLow.rotation.z = -0.15;
+                if (vrm.update) vrm.update(0);
+                leftEyeBone = hum.getNormalizedBoneNode('leftEye');
+                rightEyeBone = hum.getNormalizedBoneNode('rightEye');
+            }
+            if (vrm.lookAt) vrm.lookAt.target = null;
+            camera.position.set(0, headY + 0.08, 0.95);
+            camera.lookAt(0, headY + 0.02, 0);
+        }, undefined, (err) => console.error('VRM load error:', err));
+
+        const clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            if (currentVrm) {
+                const em = currentVrm.expressionManager;
+                if (em) {
+                    for (const v of VISEMES) em.setValue(v, 0);
+                    if (VISEMES.includes(control.viseme)) em.setValue(control.viseme, control.visemeWeight);
+                    em.setValue('blink', control.blink);
+                    for (const e of EMOTIONS) em.setValue(e, 0);
+                    if (control.emotion !== 'neutral' && control.emotionWeight > 0) em.setValue(control.emotion, control.emotionWeight);
+                }
+                const yaw = control.eyeX * EYE_YAW, pitch = -control.eyeY * EYE_PITCH;
+                if (leftEyeBone) leftEyeBone.rotation.set(pitch, yaw, 0);
+                if (rightEyeBone) rightEyeBone.rotation.set(pitch, yaw, 0);
+                currentVrm.update(delta);
+            }
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            if (!wrap.clientWidth) return;
+            camera.aspect = wrap.clientWidth / wrap.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+        });
+    </script>
+</body>
+
+</html>

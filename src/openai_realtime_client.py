@@ -191,6 +191,13 @@ class OpenAIRealtimeClient:
         self._mic_suppressed_until = 0.0
         self._playback_interrupted = False
         self._discard_assistant_audio = False
+        self._response_active = False
+        self._pending_response_create = False
+        # Track whether a model response is currently in progress so tool results
+        # don't fire a second response.create (which errors with
+        # conversation_already_has_active_response and wedges the session).
+        self._response_active = False
+        self._pending_response_create = False
 
         # Measured speaker output-buffer latency (ms). Visemes are computed at
         # audio-write time, but PortAudio holds the audio in its output buffer
@@ -340,6 +347,8 @@ class OpenAIRealtimeClient:
         self._mic_suppressed_until = 0.0
         self._playback_interrupted = False
         self._discard_assistant_audio = False
+        self._response_active = False
+        self._pending_response_create = False
 
         # Mark session as active
         self.is_active = True
@@ -365,6 +374,8 @@ class OpenAIRealtimeClient:
         self._mic_suppressed_until = 0.0
         self._playback_interrupted = False
         self._discard_assistant_audio = False
+        self._response_active = False
+        self._pending_response_create = False
 
         # 2. Cancel the event processing task if it exists
         if self._event_task is not None:
@@ -506,14 +517,11 @@ class OpenAIRealtimeClient:
         }
         await self._ws.send(json.dumps(item_create_event))
 
-        # Send response.create to trigger model response
-        response_create_event = {
-            "type": "response.create",
-            "response": {
-                "output_modalities": ["audio"],
-            },
-        }
-        await self._ws.send(json.dumps(response_create_event))
+        # Trigger the model response (gated so we never double-create).
+        if self._response_active:
+            self._pending_response_create = True
+        else:
+            await self._send_response_create()
 
     async def send_tool_result(self, tool_use_id: str, result: dict) -> None:
         """Send conversation.item.create (function_call_output) + response.create.
@@ -537,14 +545,26 @@ class OpenAIRealtimeClient:
         }
         await self._ws.send(json.dumps(item_create_event))
 
-        # Send response.create to trigger model follow-up response
-        response_create_event = {
+        # Only request a follow-up response if one isn't already active. If a
+        # response is in progress (common when the model fires multiple tool
+        # calls, e.g. set_expression), defer a single response.create until the
+        # active response finishes. This avoids the
+        # conversation_already_has_active_response error that otherwise wedges
+        # the session and makes the assistant "stop responding".
+        if self._response_active:
+            self._pending_response_create = True
+            logger.debug("Tool result stored; deferring response.create (response active)")
+        else:
+            await self._send_response_create()
+
+    async def _send_response_create(self):
+        """Send a response.create and mark a response as active."""
+        self._pending_response_create = False
+        self._response_active = True
+        await self._ws.send(json.dumps({
             "type": "response.create",
-            "response": {
-                "output_modalities": ["audio"],
-            },
-        }
-        await self._ws.send(json.dumps(response_create_event))
+            "response": {"output_modalities": ["audio"]},
+        }))
 
     @staticmethod
     def _resolve_audio_device(sd, configured_index: Optional[int], direction: str):
@@ -567,6 +587,30 @@ class OpenAIRealtimeClient:
                 exc,
             )
             return None
+
+    @staticmethod
+    def _device_name(sd, index, direction):
+        """Return the device name for an index (used to re-find it after the
+        device sleeps/wakes and its index shifts)."""
+        if index is None:
+            return None
+        try:
+            return sd.query_devices(int(index)).get("name")
+        except Exception:
+            return None
+
+    @staticmethod
+    def _resolve_input_by_name(sd, name):
+        """Find an input-capable device index by its name, or None."""
+        if not name:
+            return None
+        try:
+            for i, d in enumerate(sd.query_devices()):
+                if d.get("name") == name and int(d.get("max_input_channels", 0)) >= 1:
+                    return i
+        except Exception:
+            pass
+        return None
 
     @classmethod
     def _open_sounddevice_stream(
@@ -635,56 +679,98 @@ class OpenAIRealtimeClient:
         sample_rate = 24000
         chunk_size = 2400  # 100 ms
         executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="oai_audio_in")
-        stream = None
         loop = asyncio.get_running_loop()
 
+        # Remember the configured mic BY NAME. When a USB mic (e.g. DJI) sleeps
+        # or briefly disconnects, PortAudio can reassign indices; re-resolving by
+        # name lets us reconnect to the same physical mic without a restart.
+        target_name = self._device_name(sd, self.input_device_index, "input")
+        backoff = 0.5
+
         try:
-            stream, device_index = self._open_sounddevice_stream(
-                sd,
-                sd.RawInputStream,
-                self.input_device_index,
-                "input",
-                samplerate=sample_rate,
-                blocksize=chunk_size,
-                channels=1,
-                dtype="int16",
-            )
-            logger.info(
-                "🎤 Microphone capture started (24kHz, mono, PCM16, device=%s)",
-                device_index,
-            )
-
+            # Reconnect loop: a device error (sleep/unplug) no longer ends the
+            # session — we close the stream and retry until the mic returns.
             while self.is_active:
-                audio_data, overflowed = await loop.run_in_executor(
-                    executor, stream.read, chunk_size
-                )
-                if overflowed:
-                    logger.warning("Microphone input overflowed")
+                stream = None
+                try:
+                    idx = self.input_device_index
+                    if target_name is not None:
+                        named = self._resolve_input_by_name(sd, target_name)
+                        if named is None:
+                            # The specific mic isn't present (asleep/unplugged).
+                            # Wait for it rather than grabbing the laptop mic.
+                            raise RuntimeError(f"configured mic {target_name!r} not present")
+                        idx = named
+                    stream, device_index = self._open_sounddevice_stream(
+                        sd,
+                        sd.RawInputStream,
+                        idx,
+                        "input",
+                        samplerate=sample_rate,
+                        blocksize=chunk_size,
+                        channels=1,
+                        dtype="int16",
+                    )
+                    # If we have a specific target and the open fell back to the
+                    # system default, don't use it — wait for the named mic.
+                    if target_name is not None and device_index is None:
+                        raise RuntimeError(f"configured mic {target_name!r} unavailable; waiting")
+                    logger.info(
+                        "🎤 Microphone capture started (24kHz, mono, PCM16, device=%s, name=%r)",
+                        device_index, target_name,
+                    )
+                    backoff = 0.5  # reset after a healthy open
 
-                # Always drain the physical input stream, including while Sunny
-                # speaks, so stale DJI/PortAudio audio cannot accumulate. Only
-                # forwarding to OpenAI is paused during playback and its tail.
-                if self._input_audio_is_suppressed():
+                    while self.is_active:
+                        audio_data, overflowed = await loop.run_in_executor(
+                            executor, stream.read, chunk_size
+                        )
+                        if overflowed:
+                            logger.warning("Microphone input overflowed")
+
+                        # Always drain the physical input stream, including while
+                        # Sunny speaks, so stale DJI/PortAudio audio cannot
+                        # accumulate. Forwarding is paused during playback + tail.
+                        if self._input_audio_is_suppressed():
+                            continue
+                        await self._send_audio_chunk_raw(bytes(audio_data))
+
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    # Mic likely slept/disconnected. Keep the SESSION alive and
+                    # retry — the assistant simply can't hear until it returns.
+                    logger.warning(
+                        "🎤 Microphone stream lost (%s); reconnecting in %.1fs…",
+                        exc, backoff,
+                    )
+                    if stream is not None:
+                        try:
+                            stream.abort()
+                        except Exception:
+                            pass
+                        try:
+                            stream.close()
+                        except Exception:
+                            pass
+                        stream = None
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 1.5, 3.0)
                     continue
-                await self._send_audio_chunk_raw(bytes(audio_data))
-
+                finally:
+                    if stream is not None:
+                        try:
+                            stream.abort()
+                        except Exception:
+                            pass
+                        try:
+                            stream.close()
+                        except Exception:
+                            pass
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            self.is_active = False
-            logger.error("Error capturing audio: %s", exc)
         finally:
-            if stream is not None:
-                try:
-                    stream.abort()
-                except Exception:
-                    pass
             executor.shutdown(wait=True, cancel_futures=True)
-            if stream is not None:
-                try:
-                    stream.close()
-                except Exception:
-                    pass
             logger.info("Audio capture stopped")
 
     async def play_audio(self) -> None:
@@ -940,6 +1026,10 @@ class OpenAIRealtimeClient:
                     )
                     # Continue processing - do NOT set is_active = False
 
+                elif event_type == "response.created":
+                    # A model response is now in progress.
+                    self._response_active = True
+
                 elif event_type == "session.created":
                     logger.info("OpenAI Realtime session created")
 
@@ -952,6 +1042,11 @@ class OpenAIRealtimeClient:
                     if self._assistant_playback_active:
                         self._assistant_audio_done = True
                     self._discard_assistant_audio = False
+                    # Response finished: clear active flag and flush any tool
+                    # result that was waiting for a follow-up response.create.
+                    self._response_active = False
+                    if self._pending_response_create:
+                        await self._send_response_create()
                     logger.debug("OpenAI Realtime response completed")
 
                 else:

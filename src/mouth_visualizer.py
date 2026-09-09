@@ -3,7 +3,7 @@ Visual Mouth Animation for Lip Sync Testing
 Flask web app that shows animated mouth movements
 """
 
-from flask import Flask, abort, jsonify, render_template, request, send_file, url_for
+from flask import Flask, abort, jsonify, render_template, request, send_file, url_for, Response
 from flask_socketio import SocketIO, emit
 import threading
 import queue
@@ -17,6 +17,8 @@ AVATAR_DIR = os.path.realpath(os.path.join(TEMPLATE_DIR, 'avatars'))
 
 app = Flask(__name__, template_folder=TEMPLATE_DIR)
 app.config['SECRET_KEY'] = 'robot-mouth-secret'
+app.config['TEMPLATES_AUTO_RELOAD'] = True
+app.jinja_env.auto_reload = True
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Queue for mouth updates
@@ -34,11 +36,48 @@ get_current_settings = None
 # Callback to save settings (receives dict of fields to update)
 save_current_settings = None
 
+# Callback returning the list of known people (list of dicts) for /api/people
+get_known_people = None
+
+# Callback returning the latest camera preview frame as JPEG bytes
+get_preview_jpeg = None
+
+# Callback returning available personality modes [{id, label}, ...]
+get_personalities = None
+
 
 @app.route('/')
 def index():
-    """Main page with mouth animation"""
+    """Modern dashboard: avatar + live chat + known people."""
+    return render_template('dashboard.html')
+
+
+@app.route('/classic')
+def classic():
+    """Legacy single-column mouth/avatar page."""
     return render_template('mouth.html')
+
+
+@app.route('/api/people')
+def api_people():
+    """Return the enrolled people (names + metadata) for the UI."""
+    if get_known_people:
+        try:
+            return jsonify({'people': get_known_people()})
+        except Exception as e:
+            print(f"Error listing people: {e}")
+    return jsonify({'people': []})
+
+
+@app.route('/camera.jpg')
+def camera_jpg():
+    """Return the latest camera preview frame (annotated) as a JPEG."""
+    if get_preview_jpeg:
+        data = get_preview_jpeg()
+        if data:
+            return Response(data, mimetype='image/jpeg',
+                            headers={'Cache-Control': 'no-store'})
+    return ('', 204)
 
 
 @app.route('/avatar')
@@ -137,6 +176,9 @@ def get_settings():
             'openai_voice_id': settings.get('openai_voice_id', 'alloy'),
             'openai_model_id': settings.get('openai_model_id', 'gpt-realtime-2.1'),
             'openai_api_key': masked_key,
+            'camera_index': settings.get('camera_index', 0),
+            'personality': settings.get('personality', 'therapist'),
+            'personalities': get_personalities() if get_personalities else [],
         })
     return jsonify({})
 

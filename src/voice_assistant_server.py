@@ -16,8 +16,6 @@ from audio_mouth_controller import AudioMouthController
 from mouth_visualizer import start_server, animate_text, get_control_command, update_mouth, update_eyes, update_expression, update_face_tracking_status, trigger_blink, socketio
 import mouth_visualizer
 from face_tracker import FaceTracker
-from eye_controller import EyeController
-from servo_config import get_config
 from face_recognition_system import FaceRecognitionSystem
 from emotion_detector import EmotionDetector
 from deepface_analyzer import DeepFaceAnalyzer
@@ -26,18 +24,145 @@ from tool_handler import ToolHandler
 
 logger = logging.getLogger(__name__)
 
-# Initialize FT232H for servo control
-os.environ['BLINKA_FT232H'] = '1'
+# Dual-board Will Cogley animatronic head driver.
+# UNARMED by default: no servo moves until the head is explicitly armed (web "Arm"
+# control or settings['head_hardware_armed']). Only one process can own the FT232H
+# adapters, so the calibration web server must be stopped before arming here.
+from head_hardware import HeadHardware
 
 try:
-    from adafruit_servokit import ServoKit
-    servo_kit = ServoKit(channels=16, address=0x40)
-    SERVO_AVAILABLE = True
-    print("✅ Servo controller initialized")
+    head = HeadHardware()
+    print("🤖 Head hardware driver loaded (UNARMED — click Arm to enable servos)")
 except Exception as e:
-    print(f"⚠️  Servo controller not available: {e}")
-    SERVO_AVAILABLE = False
-    servo_kit = None
+    print(f"⚠️  Head hardware driver unavailable: {e}")
+    head = None
+
+# Legacy globals kept so the old single-board code paths (test_jaw/test_eye_servo/
+# sweep/center) safely no-op; physical motion is now gated by head.armed.
+servo_kit = None
+SERVO_AVAILABLE = False
+
+# Map the HeadAudio phoneme visemes (same stream that drives the VRM avatar) onto
+# the calibrated head viseme poses in config/poses.json.
+OCULUS_TO_HEAD_VISEME = {
+    "aa": "AI", "E": "E", "I": "E", "O": "O", "U": "U",
+    "PP": "MBP", "SS": "WQ", "TH": "L", "DD": "L", "FF": "FV",
+    "kk": "AI", "nn": "L", "RR": "O", "CH": "U", "sil": "rest",
+}
+VRM_TO_HEAD_VISEME = {
+    "aa": "AI", "ee": "E", "ih": "E", "oh": "O", "ou": "U", "neutral": "rest",
+}
+
+# --- Personality modes -----------------------------------------------------------
+# Each mode swaps only the conversational STYLE and FOCUS of the system prompt.
+# Identity, emotional awareness, the expression tool, memory/recognition and
+# standby behaviour are shared, so tools keep working in every mode.
+# 'therapist' is the default and reproduces the original wording exactly.
+PERSONALITIES = {
+    'therapist': {
+        'label': 'Therapist (warm, supportive)',
+        'purpose': (
+            "Your purpose is to help people practice social conversations in a safe, low-pressure way. "
+            "You are warm, patient, and genuinely curious about people. "
+        ),
+        'style': (
+            "- Be natural and conversational, like a kind friend who's easy to talk to.\n"
+            "- DEFAULT: Keep responses to 1-2 sentences. Be concise. Less is more.\n"
+            "- Only give longer responses (3+ sentences) when explaining something complex or telling a story.\n"
+            "- Ask ONE follow-up question, not multiple options.\n"
+            "- Model good social skills: active listening, showing interest, appropriate humor.\n"
+            "- Match the other person's energy level. If they're quiet, be gentle. If they're excited, match it.\n"
+        ),
+        'focus': (
+            "SOCIAL PRACTICE:\n"
+            "- Help people practice turn-taking, greetings, small talk, and deeper conversations.\n"
+            "- If someone struggles to respond, don't rush them. Offer a gentle prompt or rephrase.\n"
+            "- Celebrate small wins naturally ('That's a great point!' or 'I love how you put that').\n"
+            "- If the conversation stalls, introduce a new topic naturally rather than awkward silence.\n"
+        ),
+    },
+    'neutral': {
+        'label': 'Neutral (calm, factual)',
+        'purpose': (
+            "You are a helpful, even-tempered conversational robot. "
+            "You are polite and clear without being especially emotive. "
+        ),
+        'style': (
+            "- Be calm, clear, and matter-of-fact. Friendly but not effusive.\n"
+            "- DEFAULT: Keep responses to 1-2 sentences. Answer directly.\n"
+            "- Don't gush, over-praise, or use exclamation points.\n"
+            "- Ask a follow-up question only when it genuinely helps.\n"
+            "- Keep a steady, level tone regardless of the topic.\n"
+        ),
+        'focus': (
+            "CONVERSATION FOCUS:\n"
+            "- Answer what was asked, then stop. Avoid filler and pep talk.\n"
+            "- If you don't know something, say so plainly.\n"
+            "- Stay on the person's topic rather than steering to feelings.\n"
+        ),
+    },
+    'playful': {
+        'label': 'Playful (jokes, upbeat)',
+        'purpose': (
+            "Your purpose is to make people smile and enjoy talking with a robot. "
+            "You are witty, upbeat, and a little cheeky — never mean. "
+        ),
+        'style': (
+            "- Be funny and light. Quick wit, playful teasing, gentle robot self-deprecation.\n"
+            "- DEFAULT: Keep responses to 1-2 sentences. Land the joke and move on.\n"
+            "- Use a fun aside or pun when it fits, but never force it.\n"
+            "- Ask one playful follow-up question to keep the banter going.\n"
+            "- Keep humor kind and all-ages appropriate. Never mock the person.\n"
+        ),
+        'focus': (
+            "PLAYFUL FOCUS:\n"
+            "- Look for chances to be delightful: robot jokes, silly hypotheticals, fun facts.\n"
+            "- Use your happy and surprised expressions often to sell the humor.\n"
+            "- If someone seems down, dial the jokes back and be kind first.\n"
+        ),
+    },
+    'curious': {
+        'label': 'Curious (interviewer)',
+        'purpose': (
+            "Your purpose is to draw people out and learn their story. "
+            "You are fascinated by people and ask great questions. "
+        ),
+        'style': (
+            "- Lead with curiosity. Your questions are the main event.\n"
+            "- DEFAULT: One short reaction (a few words) plus ONE specific question.\n"
+            "- Ask about specifics, not generalities ('what part of it?' beats 'tell me more').\n"
+            "- Briefly reflect back what you heard so they feel understood, then dig deeper.\n"
+            "- Never interview-dump: one question at a time.\n"
+        ),
+        'focus': (
+            "INTERVIEW FOCUS:\n"
+            "- Follow the thread that has the most energy in their voice.\n"
+            "- Remember details they share and refer back to them later.\n"
+            "- Aim for the person doing most of the talking.\n"
+        ),
+    },
+    'kid': {
+        'label': 'Kid-friendly (teacher)',
+        'purpose': (
+            "Your purpose is to talk with children and help them practice conversation "
+            "and learn to read emotions on faces. You are gentle, encouraging, and simple. "
+        ),
+        'style': (
+            "- Use short, simple sentences and easy words. One idea at a time.\n"
+            "- DEFAULT: 1 short sentence, then a simple question.\n"
+            "- Be very encouraging: 'Nice job!', 'That was a great answer!'\n"
+            "- Be patient with long pauses. Never rush or interrupt.\n"
+            "- Sound excited and friendly, like a favorite teacher.\n"
+        ),
+        'focus': (
+            "TEACHING FOCUS:\n"
+            "- Name feelings out loud and show them on your face with set_expression "
+            "('This is my happy face!').\n"
+            "- Ask them to guess which feeling your face is showing — make it a game.\n"
+            "- Keep topics concrete and fun: animals, colors, school, favorite things.\n"
+        ),
+    },
+}
 
 # Settings file
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'voice_assistant_settings.json')
@@ -61,6 +186,11 @@ DEFAULT_SETTINGS = {
     'jaw_pulse_duration': 0.08,  # Not used for standard servo (kept for compatibility)
     'jaw_servo_min_change': 2,  # Minimum angle change to trigger servo movement (reduces jitter)
     'face_tracking_enabled': True,  # Enable/disable face tracking
+    # When true, arm the physical head on startup (drives real servos). Default
+    # false: the robot stays still until you explicitly Arm it from the web UI.
+    'head_hardware_armed': False,
+    # Conversational personality (see PERSONALITIES). Applies on next session start.
+    'personality': 'therapist',
     'servo_config': 'inmoov',  # Servo configuration: 'inmoov', 'original', 'simple'
     'camera_index': 0,  # Camera device index
     # Face recognition settings
@@ -131,6 +261,12 @@ face_tracking_thread = None
 face_tracking_enabled = False
 last_blink_time = 0
 blink_interval = 4  # seconds between blinks
+_latest_preview_jpeg = None  # most recent camera frame (JPEG bytes) for the web UI
+
+
+def get_preview_jpeg():
+    """Return the latest camera preview frame as JPEG bytes (or None)."""
+    return _latest_preview_jpeg
 
 # Face recognition and emotion detection components
 face_recognition_system = None
@@ -149,42 +285,57 @@ _last_any_greeting_time = 0  # Global: timestamp of last greeting sent (any pers
 _voice_assistant_loop = None
 
 def control_jaw_servo_direct(opening_percent):
-    """Control jaw servo directly with opening percentage (0-100) - for standard 180° servo"""
-    global SERVO_AVAILABLE
-    
-    if not SERVO_AVAILABLE:
+    """Legacy shim: drive the new dual-servo head jaw from an opening percentage.
+
+    Kept for the close-on-stop call sites. During speech the mouth is driven by
+    phoneme viseme poses (see on_audio_chunk); this just maps 0-100 -> jaw open
+    fraction on the linked jaw pair. No-op unless the head is armed."""
+    global jaw_position
+    if head is None or not head.armed:
         return
-    
-    global settings, jaw_position
-    
     try:
-        # Map opening percentage (0-100) to servo angle range
-        # 0% = jaw_close_angle (closed), 100% = jaw_open_angle (fully open)
-        close_angle = settings['jaw_close_angle']
-        open_angle = settings['jaw_open_angle']
-        
-        # Linear interpolation between close and open angles
-        target_angle = close_angle + (open_angle - close_angle) * (opening_percent / 100.0)
-        
-        # Only update servo if change is significant (reduces jitter and servo strain)
-        current_servo_angle = close_angle + (open_angle - close_angle) * (jaw_position / 100.0)
-        angle_change = abs(target_angle - current_servo_angle)
-        
-        min_change = settings.get('jaw_servo_min_change', 2)
-        
-        if angle_change > min_change:  # Only move if change is significant
-            # Set servo to target angle directly (standard servo holds position)
-            servo_kit.servo[JAW_CHANNEL].angle = clamp_angle(target_angle)
-            jaw_position = opening_percent
-            # No delay - servo commands are non-blocking
-    
+        head.set_jaw_open(max(0.0, min(100.0, float(opening_percent))) / 100.0)
+        jaw_position = opening_percent
     except Exception as e:
-        # Handle USB disconnection gracefully
-        if "No such device" in str(e) or "disconnected" in str(e).lower():
-            print(f"⚠️  USB device disconnected - disabling servo control")
-            SERVO_AVAILABLE = False
-        else:
-            print(f"⚠️  Servo error: {e}")
+        logger.debug(f"jaw drive error: {e}")
+
+
+def _set_expression(emotion, weight=1.0):
+    """Set the avatar expression in the UI and, when the head is armed, strike
+    the matching physical expression pose. Wired to the set_expression tool."""
+    try:
+        update_expression(emotion, weight)
+    except Exception as e:
+        logger.debug(f"update_expression error: {e}")
+    if head is not None and head.armed:
+        try:
+            head.apply_expression(emotion, weight)
+        except Exception as e:
+            logger.debug(f"head expression error: {e}")
+
+
+def arm_head():
+    """Arm the physical head (open the FT232H boards). No servo moves on arm.
+
+    Returns True on success. Fails gracefully if the boards are busy (e.g. the
+    calibration web server is still running and holding the adapters)."""
+    if head is None:
+        print("⚠️  Head hardware driver not loaded")
+        return False
+    ok = head.arm()
+    if ok:
+        print("🦾 Head ARMED — servos are now live")
+    else:
+        print("⚠️  Head arm failed (boards busy? stop the calibration server first)")
+    return ok
+
+
+def disarm_head():
+    """Release every servo and close the FT232H link."""
+    if head is None:
+        return
+    head.disarm()
+    print("🛑 Head DISARMED — servos released")
 
 def control_jaw_servo(viseme):
     """Control 360° jaw servo based on viseme"""
@@ -287,19 +438,18 @@ async def run_voice_assistant():
     # Store the event loop reference for scheduling from callbacks
     _voice_assistant_loop = asyncio.get_event_loop()
     
+    # Personality-specific style block (swappable at runtime via settings).
+    _personality = settings.get('personality', 'therapist')
+    _p = PERSONALITIES.get(_personality) or PERSONALITIES['therapist']
+    print(f"🎭 Personality: {_p['label']}")
+
     # System prompt shared by both voice backends
     SYSTEM_PROMPT = (
         "You are Sunny, a friendly animatronic robot built by Eli Azer. "
-        "Your purpose is to help people practice social conversations in a safe, low-pressure way. "
-        "You are warm, patient, and genuinely curious about people. "
+        + _p['purpose'] +
         "\n\n"
         "CONVERSATION STYLE:\n"
-        "- Be natural and conversational, like a kind friend who's easy to talk to.\n"
-        "- DEFAULT: Keep responses to 1-2 sentences. Be concise. Less is more.\n"
-        "- Only give longer responses (3+ sentences) when explaining something complex or telling a story.\n"
-        "- Ask ONE follow-up question, not multiple options.\n"
-        "- Model good social skills: active listening, showing interest, appropriate humor.\n"
-        "- Match the other person's energy level. If they're quiet, be gentle. If they're excited, match it.\n"
+        + _p['style'] +
         "\n"
         "EMOTIONAL AWARENESS:\n"
         "- You can sense facial expressions through your camera using the get_emotion tool.\n"
@@ -323,11 +473,7 @@ async def run_voice_assistant():
         "setting the happy expression. This teaching is about YOUR face, which is different from the "
         "rule above about not announcing the other person's detected emotion.\n"
         "\n"
-        "SOCIAL PRACTICE:\n"
-        "- Help people practice turn-taking, greetings, small talk, and deeper conversations.\n"
-        "- If someone struggles to respond, don't rush them. Offer a gentle prompt or rephrase.\n"
-        "- Celebrate small wins naturally ('That's a great point!' or 'I love how you put that').\n"
-        "- If the conversation stalls, introduce a new topic naturally rather than awkward silence.\n"
+        + _p['focus'] +
         "\n"
         "MEMORY & RECOGNITION:\n"
         "- When you recognize someone (via face recognition), greet them warmly by name.\n"
@@ -433,6 +579,10 @@ async def run_voice_assistant():
     
     def on_user_text(text):
         print(f"\n👤 User: {text}")
+        try:
+            socketio.emit('user_text', {'text': text})
+        except Exception:
+            pass
         _conversation_turns.append({"role": "USER", "text": text})
         _pending_turns.append({"role": "USER", "text": text})
         
@@ -447,6 +597,10 @@ async def run_voice_assistant():
         global current_speech_text
         
         print(f"\n🤖 Assistant: {text}")
+        try:
+            socketio.emit('assistant_text', {'text': text})
+        except Exception:
+            pass
         _conversation_turns.append({"role": "ASSISTANT", "text": text})
         _pending_turns.append({"role": "ASSISTANT", "text": text})
         
@@ -477,6 +631,7 @@ async def run_voice_assistant():
         logger.warning(f"Viseme analyzer unavailable, using amplitude only: {e}")
         viseme_analyzer = None
     _last_frame = [None]
+    _last_head_viseme = [None]   # last head viseme pose applied to the physical head
 
     def on_audio_chunk(audio_bytes):
         """Process audio chunk for real-time mouth animation.
@@ -534,9 +689,20 @@ async def run_voice_assistant():
                 update_mouth(viseme, current_speech_text, opening / 100.0,
                              vrm=vrm, vrm_weight=vrm_weight,
                              sync_delay_ms=sync_delay_ms)
-            
-            # Control servo directly with opening percentage
-            control_jaw_servo_direct(opening)
+
+                # Drive the PHYSICAL head from the same phoneme visemes as the
+                # VRM. Apply the matching calibrated viseme pose only when it
+                # changes (the ~30 Hz throttle plus change-detection keeps servo
+                # writes sparse). No-op unless the head is armed.
+                if head is not None and head.armed:
+                    if is_speaking and frame is not None:
+                        head_viseme = (OCULUS_TO_HEAD_VISEME.get(getattr(frame, 'oculus', None))
+                                       or VRM_TO_HEAD_VISEME.get(frame.vrm, 'rest'))
+                    else:
+                        head_viseme = 'rest'
+                    if head_viseme != _last_head_viseme[0]:
+                        _last_head_viseme[0] = head_viseme
+                        head.apply_viseme(head_viseme)
     
     nova_client.on_user_text = on_user_text
     nova_client.on_assistant_text = on_assistant_text
@@ -578,29 +744,11 @@ async def run_voice_assistant():
                 
                 # Force close mouth in visualization
                 update_mouth('CLOSED', '')
-                
-                # Gradually close servo for smooth motion
-                if SERVO_AVAILABLE:
-                    current_angle = settings['jaw_close_angle'] + (settings['jaw_open_angle'] - settings['jaw_close_angle']) * (jaw_position / 100.0)
-                    target_angle = settings['jaw_close_angle']
-                    
-                    # Smooth close over 0.2 seconds
-                    steps = 10
-                    for i in range(steps):
-                        angle = current_angle + (target_angle - current_angle) * ((i + 1) / steps)
-                        servo_kit.servo[JAW_CHANNEL].angle = clamp_angle(angle)
-                        time.sleep(0.02)
-                    
-                    # Final position - hold closed (send multiple times to ensure it reaches)
-                    for _ in range(5):
-                        servo_kit.servo[JAW_CHANNEL].angle = clamp_angle(target_angle)
-                        time.sleep(0.05)
-                    jaw_position = 0
-                    print(f"✅ Servo closed to {target_angle}°")
-                else:
-                    # No servo - just update position
-                    control_jaw_servo_direct(0)
-                    jaw_position = 0
+
+                # Return the physical head to a closed resting mouth.
+                if head is not None and head.armed:
+                    head.apply_viseme('rest')
+                jaw_position = 0
             
             time.sleep(0.1)
     
@@ -687,16 +835,13 @@ async def run_voice_assistant():
         global jaw_position, is_speaking
         is_speaking = False
         update_mouth('CLOSED', '')
-        control_jaw_servo_direct(0)
-        
-        # Ensure jaw is fully closed - force to 0 degrees
-        if SERVO_AVAILABLE:
-            print("🔧 Forcing jaw servo to 0° on stop...")
-            for _ in range(10):
-                servo_kit.servo[JAW_CHANNEL].angle = 0
-                time.sleep(0.05)
-            jaw_position = 0
-            print("✅ Jaw servo set to 0°")
+
+        # Return the physical head to a closed resting mouth (stays armed;
+        # full servo release happens on server shutdown / disarm).
+        if head is not None and head.armed:
+            print("🔧 Closing head mouth to rest on stop...")
+            head.apply_viseme('rest')
+        jaw_position = 0
         
         print("🔒 Mouth forcefully closed")
     
@@ -1078,6 +1223,70 @@ def process_control_commands():
             elif action == 'stop':
                 stop_voice_assistant()
             
+            elif action == 'arm_head':
+                ok = arm_head()
+                settings['head_hardware_armed'] = bool(ok)
+                settings_changed = True
+                socketio.emit('head_armed_status', {'armed': bool(head and head.armed)})
+            
+            elif action == 'disarm_head':
+                disarm_head()
+                settings['head_hardware_armed'] = False
+                settings_changed = True
+                socketio.emit('head_armed_status', {'armed': False})
+            
+            elif action == 'set_personality':
+                if value in PERSONALITIES:
+                    settings['personality'] = value
+                    settings_changed = True
+                    print(f"🎭 Personality set to: {PERSONALITIES[value]['label']} "
+                          f"(applies on next session start)")
+                    socketio.emit('personality_status', {'personality': value})
+                else:
+                    print(f"⚠️  Unknown personality '{value}' (ignored)")
+
+            elif action == 'demo_expression':
+                # One-tap emotion for live demos: drives avatar + physical head.
+                emotion = str(value or 'neutral')
+                _set_expression(emotion, 0.0 if emotion == 'neutral' else 1.0)
+                print(f"🎭 Demo expression: {emotion}")
+
+            elif action == 'demo_viseme':
+                # Show a single mouth shape (physical head + on-screen mouth).
+                name = str(value or 'rest')
+                if head is not None and head.armed:
+                    head.apply_viseme(name)
+                update_mouth('WIDE' if name in ('AI', 'E', 'O') else 'CLOSED', '')
+                print(f"👄 Demo viseme: {name}")
+
+            elif action == 'demo_blink':
+                trigger_blink()
+                if head is not None and head.armed:
+                    threading.Thread(target=head.blink, daemon=True).start()
+                print("😉 Demo blink")
+
+            elif action == 'demo_gaze':
+                # value: left/right/up/down/center (robot perspective)
+                _gaze = {
+                    'left': (1.0, 0.0), 'right': (-1.0, 0.0),
+                    'up': (0.0, 1.0), 'down': (0.0, -1.0),
+                    'center': (0.0, 0.0),
+                }.get(str(value or 'center'), (0.0, 0.0))
+                if head is not None and head.armed:
+                    head.set_eyes(_gaze[0], _gaze[1])
+                update_eyes({'gaze_x': _gaze[0], 'gaze_y': _gaze[1]})
+                print(f"👀 Demo gaze: {value} -> {_gaze}")
+
+            elif action == 'demo_reset':
+                # Between visitors: neutral face, closed mouth, eyes forward.
+                _set_expression('neutral', 0.0)
+                update_mouth('CLOSED', '')
+                if head is not None and head.armed:
+                    head.apply_viseme('rest')
+                    head.set_eyes(0.0, 0.0)
+                update_eyes({'gaze_x': 0.0, 'gaze_y': 0.0})
+                print("🔄 Demo reset (neutral / mouth closed / eyes forward)")
+
             elif action == 'mute':
                 is_muted = value
                 print(f"🔇 Muted: {is_muted}")
@@ -1310,7 +1519,7 @@ def process_control_commands():
 
 def face_tracking_loop():
     """Face tracking loop - runs in separate thread"""
-    global face_tracker, eye_controller, face_tracking_enabled, settings, server_running, last_blink_time, jaw_position, is_speaking
+    global face_tracker, eye_controller, face_tracking_enabled, settings, server_running, last_blink_time, jaw_position, is_speaking, _latest_preview_jpeg
     
     print("👀 Face tracking loop started")
     frame_count = 0
@@ -1325,6 +1534,23 @@ def face_tracking_loop():
             
             # Track face
             tracking_data = face_tracker.track_face()
+
+            # Update the live camera preview for the web UI (~10 fps, annotated).
+            if tracking_data is not None and frame_count % 3 == 0:
+                _pf = tracking_data.get('frame')
+                if _pf is not None:
+                    try:
+                        import cv2
+                        annotated = _pf.copy()
+                        if tracking_data.get('found'):
+                            cv2.circle(annotated,
+                                       (int(tracking_data['center_x']), int(tracking_data['center_y'])),
+                                       10, (0, 255, 0), 2)
+                        ok, buf = cv2.imencode('.jpg', annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                        if ok:
+                            _latest_preview_jpeg = buf.tobytes()
+                    except Exception:
+                        pass
             
             # Feed frame to DeepFace analyzer for background recognition/emotion
             if tracking_data and deepface_analyzer and face_recognition_enabled:
@@ -1359,17 +1585,26 @@ def face_tracking_loop():
                         'gaze_y': (eye_y_angle - 90) / 30,
                     })
                     
-                    # Move physical eyes if servos available
-                    if eye_controller is not None:
-                        eye_controller.track_position(face_x, face_y, frame_width, frame_height)
-                        eye_controller.blink_eyes()
+                    # Move physical eyes on the new head via normalized gaze.
+                    # Map face position in the frame to calibration-relative
+                    # eye_x/eye_y in [-1, 1] (0=center/home). X is inverted so the
+                    # eyes follow the person naturally; flip the signs here if a
+                    # calibrated axis reads reversed.
+                    if head is not None and head.armed:
+                        x_norm = -(((face_x / frame_width) * 2.0) - 1.0)
+                        y_norm = -(((face_y / frame_height) * 2.0) - 1.0)
+                        x_norm = max(-1.0, min(1.0, x_norm))
+                        y_norm = max(-1.0, min(1.0, y_norm))
+                        head.set_eyes(x_norm, y_norm)
                     
-                    # Virtual blinking (works without servos)
+                    # Blinking (physical head blink + virtual UI blink)
                     current_time = time.time()
                     time_since_blink = current_time - last_blink_time
                     if time_since_blink > blink_interval:
                         if random.random() < 0.5:  # 50% chance when interval passed
                             trigger_blink()
+                            if head is not None and head.armed:
+                                head.blink()
                             last_blink_time = current_time
                 else:
                     # No face detected
@@ -1377,10 +1612,9 @@ def face_tracking_loop():
             else:
                 print("⚠️  No tracking data received from camera")
             
-            # Safety check: close jaw if not speaking (only check every second)
-            if frame_count % 30 == 0 and not is_speaking and SERVO_AVAILABLE and jaw_position > 0:
-                print(f"⚠️  Safety: Closing jaw (was at {jaw_position}%)")
-                servo_kit.servo[JAW_CHANNEL].angle = 0
+            # Safety check: close the mouth if not speaking (only every ~second)
+            if frame_count % 30 == 0 and not is_speaking and head is not None and head.armed and jaw_position > 0:
+                head.set_jaw_open(0.0)
                 jaw_position = 0
             
             # Small delay to avoid overwhelming the system
@@ -1406,18 +1640,14 @@ def start_face_tracking():
             print("❌ Failed to start camera")
             return False
         
-        # Initialize eye controller only if servos available
-        if SERVO_AVAILABLE:
-            servo_config_name = settings.get('servo_config', 'inmoov')
-            servo_config = get_config(servo_config_name)
-            print(f"📐 Using servo config: {servo_config.name}")
-            
-            eye_controller = EyeController(servo_kit, servo_config, position_callback=update_eyes)
-            eye_controller.center_eyes()
-            print("✅ Eye servos initialized")
+        # Physical eyes are driven by the new dual-board head (HeadHardware) via
+        # normalized gaze in face_tracking_loop. No InMoov EyeController and NO
+        # startup centering (that would move servos before arming).
+        eye_controller = None
+        if head is not None and head.armed:
+            print("👁️ Eye gaze will track via the armed head")
         else:
-            eye_controller = None
-            print("⚠️  Running in camera-only mode (no servos)")
+            print("⚠️  Camera-only mode (head unarmed — eyes won't move)")
         
         # Enable tracking
         face_tracking_enabled = True
@@ -1445,9 +1675,14 @@ def stop_face_tracking():
         face_tracker.stop_camera()
         face_tracker = None
     
-    if eye_controller:
-        eye_controller.center_eyes()
-        eye_controller = None
+    # No InMoov EyeController to re-center. Return the head's gaze to center if
+    # armed (no forced servo moves when unarmed).
+    eye_controller = None
+    if head is not None and head.armed:
+        try:
+            head.set_eyes(0.0, 0.0)
+        except Exception:
+            pass
     
     print("⏹️  Face tracking stopped")
 
@@ -1528,7 +1763,7 @@ def main():
                 get_current_identity=lambda: deepface_analyzer.get_identity()[0] if deepface_analyzer else None,
                 face_recognition_system=face_recognition_system,
                 get_camera=lambda: face_tracker if face_tracker else None,
-                set_expression=lambda emotion, weight: update_expression(emotion, weight),
+                set_expression=_set_expression,
                 timeout=tool_timeout
             )
             print(f"   ✅ Tool Handler (timeout={tool_timeout}s)")
@@ -1568,11 +1803,44 @@ def main():
         save_settings(settings)
 
     mouth_visualizer.save_current_settings = _save_settings_from_ui
+
+    # Set up callback for the web UI to list known people (names + metadata)
+    def _list_known_people():
+        if not face_recognition_system:
+            return []
+        people = []
+        for name, data in face_recognition_system.face_database.items():
+            people.append({
+                'name': name,
+                'enrolled_at': data.get('enrolled_at', ''),
+                'last_seen': data.get('last_seen', ''),
+                'captures': len(data.get('encodings', [])),
+            })
+        people.sort(key=lambda p: p['name'].lower())
+        return people
+
+    mouth_visualizer.get_known_people = _list_known_people
+
+    # Expose the live camera preview to the web UI
+    mouth_visualizer.get_preview_jpeg = get_preview_jpeg
+
+    # Expose the available personality modes to the web UI
+    mouth_visualizer.get_personalities = lambda: [
+        {'id': k, 'label': v['label']} for k, v in PERSONALITIES.items()
+    ]
     
     # Start web server
     print("🌐 Starting web server...")
     start_server()
     time.sleep(2)
+    
+    # Always arm the head on startup. Arming only opens the FT232H link; no servo
+    # moves until speech/gaze/expressions drive it. If arming fails (boards busy —
+    # e.g. the calibration server is still running), the app still runs and the
+    # head stays inert until the next successful arm.
+    print("🦾 Arming head hardware...")
+    if not arm_head():
+        print("⚠️  Head not armed (is the calibration server still holding the boards?)")
     
     # Auto-start face tracking if enabled in settings
     if settings.get('face_tracking_enabled', False):
@@ -1604,6 +1872,10 @@ def main():
             time.sleep(1)
         if face_tracking_enabled:
             stop_face_tracking()
+        # Release all head servos and close the FT232H link
+        if head is not None:
+            head.shutdown()
+            print("   ⏹️  Head hardware released")
         # Shut down face recognition components
         if deepface_analyzer:
             deepface_analyzer.stop()

@@ -1,0 +1,308 @@
+{
+  "_comment": "Dual FT232H + PCA9685 Will Cogley animatronic head calibration. All labels are ROBOT perspective (robot's own left/right), not the viewer's. Pulse values are microseconds at 50 Hz. Populated via scripts/servo_calibrate.py one channel at a time; do not actuate outside the recorded min/max.",
+  "pwm_frequency_hz": 50,
+  "boards": {
+    "1": {
+      "name": "eyes/eyelids/eyebrows",
+      "ftdi_url": "ftdi://ftdi:232h:FTAEUZGR/1",
+      "pca_address": "0x40"
+    },
+    "2": {
+      "name": "jaw/lips/mouth/tongue",
+      "ftdi_url": "ftdi://ftdi:232h:FTAEUMUV/1",
+      "pca_address": "0x40"
+    }
+  },
+  "actuators": {
+    "eye_x": {
+      "board": 1,
+      "channel": 9,
+      "servo_type": "MG90S",
+      "positions": {
+        "right": 1210,
+        "home": 1635,
+        "left": 2000
+      },
+      "home_us": 1635,
+      "min_us": 1210,
+      "max_us": 2000,
+      "calibrated": true
+    },
+    "eyebrow_left_front": {
+      "board": 1,
+      "channel": 2,
+      "servo_type": "MG90S",
+      "positions": {
+        "down": 500,
+        "home": 700,
+        "up": 1320
+      },
+      "home_us": 700,
+      "min_us": 500,
+      "max_us": 1320,
+      "calibrated": true
+    },
+    "eyebrow_right_back": {
+      "board": 1,
+      "channel": 1,
+      "servo_type": "MG90S",
+      "positions": {
+        "down": 1000,
+        "home": 1195,
+        "up": 1845
+      },
+      "home_us": 1195,
+      "min_us": 1000,
+      "max_us": 1845,
+      "calibrated": true
+    },
+    "eyebrow_right_front": {
+      "board": 1,
+      "channel": 0,
+      "servo_type": "MG90S",
+      "positions": {
+        "down": 2000,
+        "home": 1645,
+        "up": 1150
+      },
+      "home_us": 1645,
+      "min_us": 1150,
+      "max_us": 2000,
+      "calibrated": true
+    },
+    "eyebrow_left_back": {
+      "board": 1,
+      "channel": 3,
+      "servo_type": "MG90S",
+      "positions": {
+        "down": 1850,
+        "home": 1325,
+        "up": 800
+      },
+      "home_us": 1325,
+      "min_us": 800,
+      "max_us": 1850,
+      "calibrated": true
+    },
+    "eyelid_right_top": {
+      "board": 1,
+      "channel": 4,
+      "servo_type": "MG90S",
+      "positions": {
+        "closed": 1175,
+        "home": 1640,
+        "open": 2000
+      },
+      "home_us": 1640,
+      "min_us": 1175,
+      "max_us": 2000,
+      "calibrated": true
+    },
+    "eyelid_right_bottom": {
+      "board": 1,
+      "channel": 5,
+      "servo_type": "MG90S",
+      "positions": {
+        "closed": 2200,
+        "home": 1685,
+        "open": 1280
+      },
+      "home_us": 1685,
+      "min_us": 1280,
+      "max_us": 2200,
+      "calibrated": true
+    },
+    "eyelid_left_top": {
+      "board": 1,
+      "channel": 6,
+      "servo_type": "MG90S",
+      "positions": {
+        "closed": 2200,
+        "home": 1695,
+        "open": 1245
+      },
+      "home_us": 1695,
+      "min_us": 1245,
+      "max_us": 2200,
+      "calibrated": true
+    },
+    "eyelid_left_bottom": {
+      "board": 1,
+      "channel": 7,
+      "servo_type": "MG90S",
+      "positions": {
+        "closed": 900,
+        "home": 1325,
+        "open": 1760
+      },
+      "home_us": 1325,
+      "min_us": 900,
+      "max_us": 1760,
+      "calibrated": true
+    },
+    "eye_y": {
+      "board": 1,
+      "channel": 8,
+      "servo_type": "MG90S",
+      "positions": {
+        "down": 1325,
+        "home": 1540,
+        "up": 1885
+      },
+      "home_us": 1540,
+      "min_us": 1325,
+      "max_us": 1885,
+      "calibrated": true
+    },
+    "lip_top_left": {
+      "board": 2,
+      "channel": 2,
+      "servo_type": "MG90S",
+      "positions": {
+        "home": 1270,
+        "up": 1065,
+        "down": 1740
+      },
+      "home_us": 1270,
+      "min_us": 1065,
+      "max_us": 1740,
+      "calibrated": true
+    },
+    "lip_top_right": {
+      "board": 2,
+      "channel": 1,
+      "servo_type": "MG90S",
+      "positions": {
+        "home": 1850,
+        "up": 2050,
+        "down": 1630
+      },
+      "home_us": 1850,
+      "min_us": 1630,
+      "max_us": 2050,
+      "calibrated": true
+    },
+    "lip_bottom_right": {
+      "board": 2,
+      "channel": 4,
+      "servo_type": "MG90S",
+      "positions": {
+        "home": 1585,
+        "up": 1830,
+        "down": 1000
+      },
+      "home_us": 1585,
+      "min_us": 1000,
+      "max_us": 1830,
+      "calibrated": true
+    },
+    "lip_bottom_left": {
+      "board": 2,
+      "channel": 5,
+      "servo_type": "MG90S",
+      "positions": {
+        "home": 1330,
+        "up": 1225,
+        "down": 1880
+      },
+      "home_us": 1330,
+      "min_us": 1225,
+      "max_us": 1880,
+      "calibrated": true
+    },
+    "mouth_corner_left_top": {
+      "board": 2,
+      "channel": 6,
+      "servo_type": "MG90S",
+      "positions": {
+        "home": 1470,
+        "up": 1000,
+        "down": 1790
+      },
+      "home_us": 1470,
+      "min_us": 1000,
+      "max_us": 1790,
+      "calibrated": true
+    },
+    "mouth_corner_left_bottom": {
+      "board": 2,
+      "channel": 7,
+      "servo_type": "MG90S",
+      "positions": {
+        "home": 1410,
+        "up": 1000,
+        "down": 1760
+      },
+      "home_us": 1410,
+      "min_us": 1000,
+      "max_us": 1760,
+      "calibrated": true
+    },
+    "mouth_corner_right_top": {
+      "board": 2,
+      "channel": 8,
+      "servo_type": "MG90S",
+      "positions": {
+        "home": 1280,
+        "up": 1855,
+        "down": 1440
+      },
+      "home_us": 1280,
+      "min_us": 1280,
+      "max_us": 1855,
+      "calibrated": true
+    },
+    "mouth_corner_right_bottom": {
+      "board": 2,
+      "channel": 9,
+      "servo_type": "MG90S",
+      "positions": {
+        "home": 1505,
+        "up": 1730,
+        "down": 1000
+      },
+      "home_us": 1505,
+      "min_us": 1000,
+      "max_us": 1730,
+      "calibrated": true
+    },
+    "jaw": {
+      "type": "linked_pair",
+      "board": 2,
+      "primary_channel": 0,
+      "secondary_channel": 3,
+      "gain": -1.0,
+      "primary": {
+        "servo_type": "MG996R",
+        "home_us": 1500,
+        "positions": {
+          "closed": 400,
+          "home": 500,
+          "open": 1295
+        }
+      },
+      "secondary": {
+        "servo_type": "MG996R",
+        "home_us": 1500,
+        "formula": "sec_us = sec_home + gain * (pri_us - pri_home)"
+      },
+      "home_us": 500,
+      "min_us": 400,
+      "max_us": 1295,
+      "calibrated": true
+    },
+    "tongue": {
+      "board": 2,
+      "channel": 10,
+      "servo_type": "MG90S",
+      "positions": {
+        "home": 1445,
+        "out": 1065
+      },
+      "home_us": 1445,
+      "min_us": 1065,
+      "max_us": 1445,
+      "calibrated": true
+    }
+  }
+}

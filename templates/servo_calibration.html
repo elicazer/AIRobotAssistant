@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Servo Calibration - Will Cogley Head</title>
+  <style>
+    :root {
+      --bg: #14161a;
+      --card: #1e2229;
+      --edge: #333a44;
+      --ink: #eef1f5;
+      --muted: #9aa4b2;
+      --accent: #4f9dff;
+      --danger: #ff4d4f;
+      --ok: #3ecf8e;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: #0f1114;
+      border-bottom: 1px solid var(--edge);
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    header h1 {
+      font-size: 16px;
+      margin: 0;
+      font-weight: 600;
+    }
+
+    .grow {
+      flex: 1;
+    }
+
+    button {
+      font: inherit;
+      cursor: pointer;
+      border-radius: 8px;
+      border: 1px solid var(--edge);
+      background: #262b33;
+      color: var(--ink);
+      padding: 8px 12px;
+    }
+
+    button:focus-visible,
+    input:focus-visible {
+      outline: 3px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .stop {
+      background: var(--danger);
+      border-color: var(--danger);
+      color: #fff;
+      font-weight: 700;
+      padding: 10px 18px;
+      font-size: 15px;
+    }
+
+    .toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    main {
+      padding: 16px;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .warn {
+      background: #3a2a12;
+      border: 1px solid #7a5a1e;
+      color: #ffcf87;
+      padding: 8px 12px;
+      border-radius: 8px;
+      margin-bottom: 14px;
+      font-size: 14px;
+      display: none;
+    }
+
+    .warn.show {
+      display: block;
+    }
+
+    .group {
+      margin: 18px 0 6px;
+      color: var(--muted);
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      border-bottom: 1px solid var(--edge);
+      padding-bottom: 6px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+      gap: 12px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--edge);
+      border-radius: 12px;
+      padding: 14px;
+    }
+
+    .card h2 {
+      font-size: 15px;
+      margin: 0 0 2px;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 10px;
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 8px 0;
+    }
+
+    input[type=range] {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+
+    input[type=number] {
+      width: 84px;
+      background: #12151a;
+      color: var(--ink);
+      border: 1px solid var(--edge);
+      border-radius: 6px;
+      padding: 6px;
+    }
+
+    select.chan {
+      background: #12151a;
+      color: var(--ink);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      padding: 3px 6px;
+      font: inherit;
+    }
+
+    .val {
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+      min-width: 74px;
+      text-align: right;
+    }
+
+    .released {
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    .slots {
+      margin-top: 10px;
+      border-top: 1px dashed var(--edge);
+      padding-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .slot {
+      display: grid;
+      grid-template-columns: 84px 1fr auto auto;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .slot label {
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: capitalize;
+    }
+
+    .slot input {
+      width: 100%;
+    }
+
+    .legacy {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #ffcf87;
+      background: #3a2a12;
+      border: 1px solid #7a5a1e;
+      border-radius: 6px;
+      padding: 6px 8px;
+    }
+
+    .mini {
+      padding: 6px 8px;
+      font-size: 13px;
+    }
+
+    .save {
+      background: #1f3a2c;
+      border-color: #2f6f4f;
+    }
+
+    .status {
+      font-size: 12px;
+      margin-top: 6px;
+      min-height: 14px;
+    }
+
+    .status.ok {
+      color: var(--ok);
+    }
+
+    .status.err {
+      color: var(--danger);
+    }
+
+    .badge {
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: #26303a;
+      color: var(--muted);
+    }
+
+    .saved {
+      color: var(--ok);
+    }
+
+    #posesPanel {
+      margin-bottom: 8px;
+    }
+
+    .poserow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .pose {
+      background: var(--card);
+      border: 1px solid var(--edge);
+      border-radius: 10px;
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 150px;
+    }
+
+    .pose .name {
+      font-weight: 600;
+      text-transform: capitalize;
+    }
+
+    .pose .btns {
+      display: flex;
+      gap: 6px;
+    }
+
+    .pose button.apply {
+      background: #223a4f;
+      border-color: #2f6f9f;
+    }
+
+    .poseedit {
+      display: none;
+      margin-top: 6px;
+      border-top: 1px dashed var(--edge);
+      padding-top: 6px;
+    }
+
+    .poseedit.show {
+      display: block;
+    }
+
+    .poseedit .fields {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 4px 8px;
+      max-height: 260px;
+      overflow: auto;
+      font-size: 12px;
+    }
+
+    .poseedit .fields label {
+      color: var(--muted);
+      align-self: center;
+    }
+
+    .poseedit .fields input {
+      width: 78px;
+    }
+
+    .poseedit .editbtns {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+
+    .posehint {
+      color: var(--muted);
+      font-size: 12px;
+      max-width: 900px;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>Servo Calibration &middot; Will Cogley Head</h1>
+    <span class="badge" id="conn">connecting&hellip;</span>
+    <span class="grow"></span>
+    <label class="toggle"><input type="checkbox" id="wide" /> Wide range ({{ abs_min }}&ndash;{{ abs_max }} µs)</label>
+    <button id="reconnect" aria-label="Reconnect to the servo boards after a power cycle">⟳ Reconnect boards</button>
+    <button class="stop" id="stopAll" aria-label="Release all servos immediately">■ RELEASE ALL</button>
+  </header>
+  <main>
+    <div class="warn" id="wideWarn">Wide range enabled. Move slowly &mdash; you can now command pulses closer to the
+      servo's physical limits.</div>
+
+    <section id="posesPanel">
+      <div class="group">Poses &mdash; expressions</div>
+      <div class="poserow" id="poseExpr"></div>
+      <div class="group">Poses &mdash; visemes (phoneme groups)</div>
+      <div class="poserow" id="poseVis"></div>
+      <p class="posehint">Click <strong>Apply</strong> to move all channels into a pose at once (clamped to calibrated
+        travel). Use <strong>Edit</strong> to tweak per-actuator values, <strong>Capture current</strong> to snapshot
+        the live pose, then <strong>Save</strong>. The jaw resolves to both linked servos automatically.</p>
+    </section>
+
+    <div class="group">Per-actuator calibration</div>
+    <div id="groups"></div>
+  </main>
+
+  <script>
+    const ABS_MIN = {{ abs_min }}, ABS_MAX = {{ abs_max }};
+    const NARROW_MIN = 1000, NARROW_MAX = 2000, STEP = 5, DEFAULT_US = 1500;
+    let wide = false;
+
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    const rangeLo = () => wide ? ABS_MIN : NARROW_MIN;
+    const rangeHi = () => wide ? ABS_MAX : NARROW_MAX;
+
+    async function api(path, body) {
+      const opt = { method: body ? "POST" : "GET" };
+      if (body) { opt.headers = { "Content-Type": "application/json" }; opt.body = JSON.stringify(body); }
+      const r = await fetch(path, opt);
+      return r.json();
+    }
+
+    const throttlers = {};
+    function throttleSet(key, board, channel, us, statusEl) {
+      clearTimeout(throttlers[key]);
+      throttlers[key] = setTimeout(async () => {
+        const res = await api("/api/set", { board, channel, us });
+        if (!res.ok) { statusEl.textContent = res.error || "set failed"; statusEl.className = "status err"; }
+        else { statusEl.textContent = "holding " + res.us + " µs"; statusEl.className = "status ok"; }
+      }, 40);
+    }
+
+    let jawThrottle = null;
+    function jawCard(a) {
+      const el = document.createElement("div");
+      el.className = "card";
+      const cal = a.calibration;
+      const savedPos = (cal && cal.primary && cal.primary.positions) || {};
+      const L = a.linked;
+      const chan = (sel) => a.channels.map(c => `<option value="${c}" ${c === sel ? "selected" : ""}>Ch ${c}</option>`).join("");
+      const slotsHtml = a.positions.map(name => `
+        <div class="slot">
+          <label>${name}</label>
+          <input type="number" data-slot="${name}" step="${STEP}" min="${ABS_MIN}" max="${ABS_MAX}" value="${savedPos[name] ?? ''}" aria-label="Jaw ${name} primary microseconds" />
+          <button class="mini" data-capslot="${name}">= now</button>
+          <button class="mini" data-goslot="${name}">Go</button>
+        </div>`).join("");
+
+      el.innerHTML = `
+        <h2>${a.label} — linked pair</h2>
+        <div class="meta">Board ${a.board} &middot; two coupled servos &middot; <code>jaw</code></div>
+        <div class="legacy">Two servos move together in opposite directions. Move the slider in SMALL steps. If they buzz/strain, click Release both and adjust the sign of gain or the secondary home.</div>
+        <div class="row" style="gap:10px;flex-wrap:wrap">
+          <label>Primary <select class="pri" aria-label="jaw primary channel">${chan(a.channel)}</select></label>
+          <label>Secondary <select class="sec" aria-label="jaw secondary channel">${chan(L.secondary_channel)}</select></label>
+          <label>Gain <input type="number" class="gain" step="0.05" value="${L.gain}" style="width:70px" aria-label="jaw coupling gain" /></label>
+        </div>
+        <div class="row" style="gap:10px;flex-wrap:wrap">
+          <label>Primary home <input type="number" class="prihome" step="${STEP}" min="${ABS_MIN}" max="${ABS_MAX}" value="${L.pri_home}" aria-label="jaw primary home" /></label>
+          <label>Secondary home <input type="number" class="sechome" step="${STEP}" min="${ABS_MIN}" max="${ABS_MAX}" value="${L.sec_home}" aria-label="jaw secondary home" /></label>
+        </div>
+        <div class="row">
+          <input type="range" min="${rangeLo()}" max="${rangeHi()}" step="${STEP}" value="${clamp(L.pri_home, rangeLo(), rangeHi())}" aria-label="jaw primary pulse" />
+          <span class="val">idle</span>
+        </div>
+        <div class="row">
+          <input type="number" class="prinum" min="${ABS_MIN}" max="${ABS_MAX}" step="${STEP}" value="${clamp(L.pri_home, rangeLo(), rangeHi())}" aria-label="jaw primary exact microseconds" />
+          <button class="mini" data-act="release">Release both</button>
+          <span class="status" aria-live="polite"></span>
+        </div>
+        <div class="slots">${slotsHtml}</div>
+        <div class="row" style="gap:6px;margin-top:8px">
+          <button class="mini save" data-act="save">Save jaw</button>
+          <span class="status ${cal?.calibrated ? 'saved' : ''}" data-savestatus>${cal?.calibrated ? '✓ saved' : ''}</span>
+        </div>
+      `;
+
+      const range = el.querySelector("input[type=range]");
+      const num = el.querySelector(".prinum");
+      const val = el.querySelector(".val");
+      const status = el.querySelector(".status");
+      const saveStatus = el.querySelector('[data-savestatus]');
+      const priSel = el.querySelector('.pri'), secSel = el.querySelector('.sec');
+      const gainEl = el.querySelector('.gain'), priHomeEl = el.querySelector('.prihome'), secHomeEl = el.querySelector('.sechome');
+
+      function driveJaw(us) {
+        us = clamp(Math.round(us), ABS_MIN, ABS_MAX);
+        range.value = clamp(us, rangeLo(), rangeHi());
+        num.value = us;
+        const gain = +gainEl.value, ph = +priHomeEl.value, sh = +secHomeEl.value;
+        const sec = clamp(Math.round(sh + gain * (us - ph)), ABS_MIN, ABS_MAX);
+        val.textContent = `pri ${us} / sec ${sec} µs`;
+        clearTimeout(jawThrottle);
+        jawThrottle = setTimeout(async () => {
+          const r1 = await api("/api/set", { board: a.board, channel: +priSel.value, us });
+          const r2 = await api("/api/set", { board: a.board, channel: +secSel.value, us: sec });
+          if (!r1.ok || !r2.ok) { status.textContent = (r1.error || r2.error || "set failed"); status.className = "status err"; }
+          else { status.textContent = `holding pri ${r1.us} / sec ${r2.us}`; status.className = "status ok"; }
+        }, 50);
+      }
+      range.addEventListener("input", () => driveJaw(+range.value));
+      num.addEventListener("change", () => driveJaw(+num.value));
+
+      el.querySelector('[data-act=release]').addEventListener("click", async () => {
+        await api("/api/release", { board: a.board, channel: +priSel.value });
+        await api("/api/release", { board: a.board, channel: +secSel.value });
+        val.textContent = "released"; status.textContent = "both released"; status.className = "status";
+      });
+      el.querySelectorAll('[data-capslot]').forEach(btn => btn.addEventListener("click", () => {
+        el.querySelector(`input[data-slot="${btn.dataset.capslot}"]`).value = num.value;
+      }));
+      el.querySelectorAll('[data-goslot]').forEach(btn => btn.addEventListener("click", () => {
+        const v = +el.querySelector(`input[data-slot="${btn.dataset.goslot}"]`).value;
+        if (v) driveJaw(v);
+      }));
+      el.querySelector('[data-act=save]').addEventListener("click", async () => {
+        const positions = {};
+        el.querySelectorAll('input[data-slot]').forEach(inp => { if (inp.value !== '') positions[inp.dataset.slot] = +inp.value; });
+        const payload = {
+          primary_channel: +priSel.value, secondary_channel: +secSel.value,
+          gain: +gainEl.value, pri_home: +priHomeEl.value, sec_home: +secHomeEl.value, positions,
+        };
+        const res = await api("/api/save_jaw", payload);
+        if (res.ok) { saveStatus.textContent = "✓ saved jaw (gain " + res.saved.gain + ")"; saveStatus.className = "status saved"; }
+        else { saveStatus.textContent = res.error || "save failed"; saveStatus.className = "status err"; }
+      });
+
+      el._applyRange = () => { range.min = rangeLo(); range.max = rangeHi(); range.value = clamp(+num.value, rangeLo(), rangeHi()); };
+      return el;
+    }
+
+    function card(a) {
+      if (a.linked) return jawCard(a);
+      const el = document.createElement("div");
+      el.className = "card";
+      const start = a.current_us ?? DEFAULT_US;
+      const cal = a.calibration;
+      const savedPos = (cal && cal.positions) || {};
+      // Prefill each slot from saved positions. For legacy entries saved before
+      // named positions existed, fall back to home_us for the "home" slot.
+      const slotVal = (name) => {
+        if (savedPos[name] != null) return savedPos[name];
+        if (name === "home" && cal && cal.home_us != null) return cal.home_us;
+        return "";
+      };
+      const legacy = (cal && !cal.positions && (cal.home_us != null))
+        ? `<div class="legacy">Previously saved (old format): home ${cal.home_us} &middot; min ${cal.min_us} &middot; max ${cal.max_us}. Re-capture the extremes into the named slots and Save.</div>`
+        : "";
+      const slotsHtml = a.positions.map(name => `
+        <div class="slot">
+          <label>${name}</label>
+          <input type="number" data-slot="${name}" step="${STEP}" min="${ABS_MIN}" max="${ABS_MAX}" value="${slotVal(name)}" aria-label="${a.label} ${name} microseconds" />
+          <button class="mini" data-capslot="${name}" title="capture current slider value">= now</button>
+          <button class="mini" data-goslot="${name}" title="drive to this value">Go</button>
+        </div>`).join("");
+
+      const chanOpts = a.channels.map(c => `<option value="${c}" ${c === a.channel ? "selected" : ""}>Ch ${c}</option>`).join("");
+      el.innerHTML = `
+        <h2>${a.label}</h2>
+        <div class="meta">Board ${a.board} &middot;
+          <label>Channel <select class="chan" aria-label="${a.label} channel">${chanOpts}</select></label>
+          &middot; ${a.servo_type} &middot; <code>${a.key}</code></div>
+        <div class="row">
+          <input type="range" min="${rangeLo()}" max="${rangeHi()}" step="${STEP}" value="${clamp(start, rangeLo(), rangeHi())}"
+                 aria-label="${a.label} pulse width in microseconds" />
+          <span class="val">${a.current_us ? a.current_us + " µs" : '<span class="released">released</span>'}</span>
+        </div>
+        <div class="row">
+          <input type="number" min="${ABS_MIN}" max="${ABS_MAX}" step="${STEP}" value="${clamp(start, rangeLo(), rangeHi())}"
+                 aria-label="${a.label} exact microseconds" />
+          <button class="mini" data-act="release">Release</button>
+          <span class="status" aria-live="polite"></span>
+        </div>
+        <div class="slots">${slotsHtml}</div>
+        ${legacy}
+        <div class="row" style="gap:6px;margin-top:8px">
+          <button class="mini save" data-act="save">Save positions</button>
+          <span class="status ${cal?.calibrated ? 'saved' : ''}" data-savestatus>${cal?.calibrated ? '✓ saved' : ''}</span>
+        </div>
+      `;
+
+      const range = el.querySelector("input[type=range]");
+      const num = el.querySelector("input[type=number]");
+      const val = el.querySelector(".val");
+      const status = el.querySelector(".status");
+      const saveStatus = el.querySelector('[data-savestatus]');
+      const chanSel = el.querySelector('.chan');
+      const channel = () => +chanSel.value;
+
+      function drive(us) {
+        us = clamp(Math.round(us), ABS_MIN, ABS_MAX);
+        range.value = clamp(us, rangeLo(), rangeHi());
+        num.value = us;
+        val.textContent = us + " µs";
+        throttleSet(a.key, a.board, channel(), us, status);
+      }
+      range.addEventListener("input", () => drive(+range.value));
+      num.addEventListener("change", () => drive(+num.value));
+      chanSel.addEventListener("change", () => {
+        status.textContent = "now targeting Ch " + channel() + " (move slider to drive)";
+        status.className = "status";
+        val.innerHTML = '<span class="released">released</span>';
+      });
+
+      el.querySelector('[data-act=release]').addEventListener("click", async () => {
+        await api("/api/release", { board: a.board, channel: channel() });
+        val.innerHTML = '<span class="released">released</span>';
+        status.textContent = "released"; status.className = "status";
+      });
+      el.querySelectorAll('[data-capslot]').forEach(btn => btn.addEventListener("click", () => {
+        el.querySelector(`input[data-slot="${btn.dataset.capslot}"]`).value = num.value;
+      }));
+      el.querySelectorAll('[data-goslot]').forEach(btn => btn.addEventListener("click", () => {
+        const v = +el.querySelector(`input[data-slot="${btn.dataset.goslot}"]`).value;
+        if (v) drive(v);
+      }));
+      el.querySelector('[data-act=save]').addEventListener("click", async () => {
+        const positions = {};
+        el.querySelectorAll('input[data-slot]').forEach(inp => {
+          if (inp.value !== '') positions[inp.dataset.slot] = +inp.value;
+        });
+        if (!Object.keys(positions).length) {
+          saveStatus.textContent = "capture at least one position first"; saveStatus.className = "status err"; return;
+        }
+        const res = await api("/api/save", { key: a.key, board: a.board, channel: channel(), positions });
+        if (res.ok) {
+          const p = res.saved.positions;
+          saveStatus.textContent = "✓ " + Object.entries(p).map(([k, v]) => k + "=" + v).join("  ");
+          saveStatus.className = "status saved";
+        } else { saveStatus.textContent = res.error || "save failed"; saveStatus.className = "status err"; }
+      });
+
+      el._applyRange = () => {
+        range.min = rangeLo(); range.max = rangeHi();
+        range.value = clamp(+num.value, rangeLo(), rangeHi());
+      };
+      return el;
+    }
+
+    let cards = [];
+    async function build() {
+      const state = await api("/api/state");
+      document.getElementById("conn").textContent = "connected";
+      const groups = {};
+      state.actuators.forEach(a => { (groups[a.group] ||= []).push(a); });
+      const container = document.getElementById("groups");
+      container.innerHTML = "";
+      cards = [];
+      for (const [group, items] of Object.entries(groups)) {
+        const h = document.createElement("div"); h.className = "group"; h.textContent = group;
+        container.appendChild(h);
+        const grid = document.createElement("div"); grid.className = "grid";
+        items.forEach(a => { const c = card(a); cards.push(c); grid.appendChild(c); });
+        container.appendChild(grid);
+      }
+    }
+
+    document.getElementById("wide").addEventListener("change", (e) => {
+      wide = e.target.checked;
+      document.getElementById("wideWarn").classList.toggle("show", wide);
+      cards.forEach(c => c._applyRange && c._applyRange());
+    });
+    document.getElementById("stopAll").addEventListener("click", async () => {
+      await api("/api/release_all", {});
+      document.querySelectorAll(".val").forEach(v => v.innerHTML = '<span class="released">released</span>');
+    });
+    document.getElementById("reconnect").addEventListener("click", async (e) => {
+      const btn = e.target; const label = btn.textContent;
+      btn.textContent = "reconnecting…"; btn.disabled = true;
+      const conn = document.getElementById("conn");
+      try {
+        const res = await api("/api/reconnect", {});
+        conn.textContent = res.ok ? "reconnected" : "reconnect failed";
+        await build();
+      } catch (err) {
+        conn.textContent = "reconnect error";
+      } finally {
+        btn.textContent = label; btn.disabled = false;
+      }
+    });
+
+    // ---- Poses (expressions + visemes) ----
+    let poseActuators = {};   // key -> {home,low,high,min_us,max_us,...}
+    let actuatorOrder = [];
+
+    // Convert between stored normalized [-1,1] and microseconds using the actuator axis.
+    function resolveUs(key, v) {
+      const a = poseActuators[key]; if (!a || v == null || v === '') return '';
+      v = Math.max(-1, Math.min(1, +v));
+      return Math.round(v >= 0 ? a.home + (a.high - a.home) * v : a.home + (a.low - a.home) * (-v));
+    }
+    function toNorm(key, us) {
+      const a = poseActuators[key]; if (!a) return 0;
+      const d = us - a.home, dh = a.high - a.home, dl = a.low - a.home;
+      if (d === 0) return 0;
+      if (dh !== 0 && (d > 0) === (dh > 0)) return +Math.max(-1, Math.min(1, d / dh)).toFixed(4);
+      if (dl !== 0 && (d > 0) === (dl > 0)) return +(-Math.max(-1, Math.min(1, d / dl))).toFixed(4);
+      return 0;
+    }
+
+    function poseChip(kind, name, targets) {
+      const chip = document.createElement("div");
+      chip.className = "pose";
+      chip.innerHTML = `
+        <span class="name">${name}</span>
+        <div class="btns">
+          <button class="mini apply">Apply</button>
+          <button class="mini edit">Edit</button>
+        </div>
+        <div class="poseedit">
+          <div class="fields"></div>
+          <div class="editbtns">
+            <button class="mini" data-a="capture">Capture current</button>
+            <button class="mini save" data-a="save">Save</button>
+            <span class="status" data-st></span>
+          </div>
+        </div>`;
+      const editor = chip.querySelector(".poseedit");
+      const fields = chip.querySelector(".fields");
+      const st = chip.querySelector("[data-st]");
+
+      chip.querySelector(".apply").addEventListener("click", async () => {
+        const res = await api("/api/apply_pose", { kind, name });
+        st.textContent = res.ok ? "applied" : (res.error || "failed");
+        st.className = "status " + (res.ok ? "ok" : "err");
+      });
+
+      let built = false;
+      chip.querySelector(".edit").addEventListener("click", () => {
+        if (!built) {
+          fields.innerHTML = actuatorOrder.map(k => {
+            const us = targets[k] != null ? resolveUs(k, targets[k]) : '';
+            return `<label>${k}</label><input type="number" data-k="${k}" step="${STEP}" min="${ABS_MIN}" max="${ABS_MAX}" value="${us}" title="µs (stored calibration-relative)" />`;
+          }).join("");
+          built = true;
+        }
+        editor.classList.toggle("show");
+      });
+
+      chip.querySelector('[data-a=capture]').addEventListener("click", async () => {
+        const state = await api("/api/state");
+        const cur = {};
+        state.actuators.forEach(a => { if (a.current_us != null) cur[a.key] = a.current_us; });
+        fields.querySelectorAll("input[data-k]").forEach(inp => {
+          if (cur[inp.dataset.k] != null) inp.value = cur[inp.dataset.k];
+        });
+        st.textContent = "captured live values"; st.className = "status";
+      });
+
+      chip.querySelector('[data-a=save]').addEventListener("click", async () => {
+        const t = {};
+        fields.querySelectorAll("input[data-k]").forEach(inp => { if (inp.value !== '') t[inp.dataset.k] = toNorm(inp.dataset.k, +inp.value); });
+        const res = await api("/api/save_pose", { kind, name, targets: t });
+        st.textContent = res.ok ? "✓ saved" : (res.error || "save failed");
+        st.className = "status " + (res.ok ? "saved" : "err");
+      });
+      return chip;
+    }
+
+    async function buildPoses() {
+      const data = await api("/api/poses");
+      poseActuators = data.actuators || {};
+      actuatorOrder = Object.keys(poseActuators);
+      const expr = document.getElementById("poseExpr");
+      const vis = document.getElementById("poseVis");
+      expr.innerHTML = ""; vis.innerHTML = "";
+      const P = data.poses || {};
+      Object.entries(P.expressions || {}).forEach(([n, t]) => expr.appendChild(poseChip("expressions", n, t)));
+      Object.entries(P.visemes || {}).forEach(([n, t]) => vis.appendChild(poseChip("visemes", n, t)));
+    }
+
+    build().catch(err => { document.getElementById("conn").textContent = "error: " + err; });
+    buildPoses().catch(err => console.error("poses:", err));
+  </script>
+</body>
+
+</html>

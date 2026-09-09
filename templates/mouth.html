@@ -546,6 +546,17 @@
             color: white;
         }
 
+        .btn-arm {
+            background: #9c27b0;
+            color: white;
+        }
+
+        .btn-arm.armed {
+            background: #d32f2f;
+            color: white;
+            box-shadow: 0 0 0 2px rgba(211, 47, 47, 0.35);
+        }
+
         .settings-panel {
             margin-top: 15px;
             padding: 15px;
@@ -729,6 +740,10 @@
                 <button class="control-btn btn-stop" id="btn-stop" onclick="stopConversation()" disabled>
                     ⏹️ Stop
                 </button>
+                <button class="control-btn btn-arm" id="btn-arm" onclick="toggleArm()"
+                    title="Energize the physical head servos. Stop the calibration server first.">
+                    🦾 Arm Head
+                </button>
                 <button class="control-btn btn-mute" id="btn-mute" onclick="toggleMute()">
                     🔊 Mute
                 </button>
@@ -749,10 +764,16 @@
                         changes take effect on the next session start</small>
                 </div>
                 <div class="setting-item">
-                    <label class="setting-label" for="microphone-select">🎤 Microphone</label>
+                    <label class="setting-label" for="microphone-select">🎤 Microphone
+                        <button type="button" id="refresh-devices" onclick="loadDevices()"
+                            style="float:right; font-size:11px; padding:2px 8px; cursor:pointer;"
+                            title="Re-scan audio devices (e.g. after the DJI wakes up)">🔄 Refresh</button>
+                    </label>
                     <select class="setting-input" id="microphone-select">
                         <option value="">Loading devices...</option>
                     </select>
+                    <small style="color:#999; font-size:11px; display:block; margin-top:4px;">
+                        If a mic is missing (asleep/just plugged in), click Refresh.</small>
                 </div>
                 <div class="setting-item">
                     <label class="setting-label" for="speaker-select">🔊 Speaker</label>
@@ -767,192 +788,9 @@
                     </select>
                 </div>
                 <div class="setting-item">
-                    <label class="setting-label">Jaw Closed Angle (degrees)</label>
-                    <input type="number" class="setting-input" id="closed-angle" value="90" min="0" max="180">
-                </div>
-                <div class="setting-item">
-                    <label class="setting-label">Jaw Max Open Angle (degrees)</label>
-                    <input type="number" class="setting-input" id="max-angle" value="130" min="0" max="180">
-                </div>
-                <div class="setting-item">
-                    <label class="setting-label">Speech Speed (characters/second)</label>
-                    <input type="range" class="setting-input" id="speech-speed" value="18" min="10" max="35" step="1">
-                    <span id="speech-speed-value">18</span>
-                </div>
-
-                <div class="setting-item" style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #ddd;">
-                    <h3 style="margin-bottom: 15px;">🦴 Jaw Servo (Channel 8 - MG996R Standard)</h3>
-                    <small style="color: #666; font-size: 12px; display: block; margin-bottom: 10px;">
-                        ✅ Standard 180° servo - angles control exact jaw position
-                    </small>
-                </div>
-
-                <div class="setting-item">
-                    <label class="setting-label">Closed Jaw Angle (degrees)</label>
-                    <input type="number" class="setting-input" id="jaw-close-angle" value="0" min="0" max="180"
-                        step="1">
-                    <small style="color: #999; font-size: 11px;">Angle when jaw is fully closed (typically
-                        0-80°)</small>
-                </div>
-
-                <div class="setting-item">
-                    <label class="setting-label">Open Jaw Angle (degrees)</label>
-                    <input type="number" class="setting-input" id="jaw-open-angle" value="120" min="0" max="180"
-                        step="1">
-                    <small style="color: #999; font-size: 11px;">Angle when jaw is fully open (typically
-                        100-140°)</small>
-                </div>
-
-
-
-                <div class="setting-item">
-                    <button class="control-btn btn-settings" onclick="testJaw()">
-                        🧪 Test Jaw (Close → Open → Close)
-                    </button>
-                </div>
-
-                <div class="setting-item" style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #ddd;">
-                    <h3 style="margin-bottom: 15px;">👁️ Face Tracking</h3>
-                    <small style="color: #666; font-size: 12px; display: block; margin-bottom: 10px;">
-                        Automatic face detection and eye tracking using camera
-                    </small>
-                </div>
-
-                <div class="setting-item">
-                    <label class="setting-label">
-                        <input type="checkbox" id="face-tracking-enabled" style="margin-right: 10px;">
-                        Enable Face Tracking
-                        <span id="face-tracking-status" style="margin-left: 10px; font-size: 12px; color: #999;">⚪
-                            Inactive</span>
-                    </label>
-                    <small style="color: #999; font-size: 11px;">Automatically track faces with eye servos and
-                        camera</small>
-                    <button class="control-btn btn-settings" onclick="testFaceTracking()" style="margin-top: 10px;">
-                        🧪 Test Connection
-                    </button>
-                </div>
-
-                <div class="setting-item">
-                    <label class="setting-label">Servo Configuration</label>
-                    <select class="setting-input" id="servo-config">
-                        <option value="inmoov">InMoov (8 servos - 4 per eye)</option>
-                        <option value="original">Original (6 servos - shared X/Y)</option>
-                        <option value="simple">Simple (2 servos - X/Y only)</option>
-                    </select>
-                    <small style="color: #999; font-size: 11px;">Select your robot's eye servo configuration</small>
-                </div>
-
-                <div class="setting-item">
-                    <label class="setting-label">Camera Device</label>
-                    <select class="setting-input" id="camera-index">
-                        <option value="0">Camera 0 (Built-in / Default)</option>
-                        <option value="1">Camera 1 (External USB)</option>
-                        <option value="2">Camera 2</option>
-                        <option value="3">Camera 3</option>
-                    </select>
-                    <small style="color: #999; font-size: 11px;">Select your camera device</small>
-                </div>
-
-                <div class="setting-item" style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #ddd;">
-                    <h3 style="margin-bottom: 15px;">👁️ Virtual Eye Blink Test</h3>
-                    <button class="control-btn btn-settings" onclick="testBlink()" style="width: 100%;">
-                        👁️ Test Blink Animation
-                    </button>
-                    <small style="color: #999; font-size: 11px; display: block; margin-top: 5px;">Click to manually
-                        trigger a blink</small>
-                </div>
-
-                <div class="setting-item" style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #ddd;">
-                    <h3 style="margin-bottom: 15px;">👁️ Eye & Eyelid Servos (Channels 0-7)</h3>
-                    <small style="color: #666; font-size: 12px; display: block; margin-bottom: 10px;">
-                        ✅ Standard 180° servos - angles control exact position (0° to 180°)
-                    </small>
-                </div>
-
-                <div class="setting-item">
-                    <label class="setting-label">Select Servo (Standard 180°)</label>
-                    <select class="setting-input" id="eye-servo-select">
-                        <option value="0">Channel 0 - Left Eye X-axis</option>
-                        <option value="1">Channel 1 - Left Eye Y-axis</option>
-                        <option value="2">Channel 2 - Left Upper Eyelid</option>
-                        <option value="3">Channel 3 - Left Lower Eyelid</option>
-                        <option value="4">Channel 4 - Right Eye X-axis</option>
-                        <option value="5">Channel 5 - Right Eye Y-axis</option>
-                        <option value="6">Channel 6 - Right Upper Eyelid</option>
-                        <option value="7">Channel 7 - Right Lower Eyelid</option>
-                    </select>
-                    <small style="color: #999; font-size: 12px; display: block; margin-top: 5px;">
-                        💡 Channel 8 (Jaw) is 360° continuous - configured separately above
-                    </small>
-                </div>
-
-                <div class="setting-item">
-                    <label class="setting-label">Test Angle (0-180°)</label>
-                    <input type="range" class="setting-input" id="eye-test-angle" value="90" min="0" max="180" step="1">
-                    <span id="eye-test-angle-value">90°</span>
-                </div>
-
-                <div class="setting-item">
-                    <button class="control-btn btn-settings" onclick="testEyeServo()"
-                        style="width: 48%; display: inline-block;">
-                        🧪 Test Servo
-                    </button>
-                    <button class="control-btn btn-settings" onclick="centerAllEyes()"
-                        style="width: 48%; display: inline-block;">
-                        🎯 Center All
-                    </button>
-                </div>
-
-                <div class="setting-item" style="margin-top: 15px;">
-                    <label class="setting-label">Min Angle (Left/Down limit)</label>
-                    <input type="number" class="setting-input" id="eye-min-angle" value="0" min="0" max="180" step="1">
-                    <small style="color: #999; font-size: 11px;">Valid range: 0-180°</small>
-                </div>
-
-                <div class="setting-item">
-                    <label class="setting-label">Max Angle (Right/Up limit)</label>
-                    <input type="number" class="setting-input" id="eye-max-angle" value="180" min="0" max="180"
-                        step="1">
-                    <small style="color: #999; font-size: 11px;">Valid range: 0-180°</small>
-                </div>
-
-                <div class="setting-item">
-                    <label class="setting-label">Center Angle (Neutral position)</label>
-                    <input type="number" class="setting-input" id="eye-center-angle" value="90" min="0" max="180"
-                        step="1">
-                    <small style="color: #999; font-size: 11px;">Valid range: 0-180°</small>
-                </div>
-
-                <div class="setting-item">
-                    <button class="control-btn btn-settings" onclick="saveEyeServoConfig()"
-                        style="width: 48%; display: inline-block;">
-                        💾 Save Config
-                    </button>
-                    <button class="control-btn btn-settings" onclick="loadEyeServoConfig()"
-                        style="width: 48%; display: inline-block;">
-                        📂 Load Config
-                    </button>
-                </div>
-
-                <div class="setting-item" style="margin-top: 15px;">
-                    <label class="setting-label">Quick Position Tests</label>
-                    <div style="display: flex; gap: 5px;">
-                        <button class="control-btn btn-settings" onclick="testEyePosition('min')" style="flex: 1;">
-                            ⬅️ Min
-                        </button>
-                        <button class="control-btn btn-settings" onclick="testEyePosition('center')" style="flex: 1;">
-                            🎯 Center
-                        </button>
-                        <button class="control-btn btn-settings" onclick="testEyePosition('max')" style="flex: 1;">
-                            ➡️ Max
-                        </button>
-                    </div>
-                </div>
-
-                <div class="setting-item">
-                    <button class="control-btn btn-settings" onclick="sweepEyeServo()" style="width: 100%;">
-                        🔄 Sweep Test (Min → Max → Center)
-                    </button>
+                    <small style="color:#999; font-size:11px; display:block;">
+                        Servo calibration, jaw, eyes and expressions live on the dedicated
+                        calibration page (scripts/servo_calibration_server.py).</small>
                 </div>
             </div>
         </div>
@@ -1384,6 +1222,32 @@
             statusElement.textContent = '✅ Connected (stopped)';
         }
 
+        let headArmed = false;
+
+        function toggleArm() {
+            if (!headArmed) {
+                socket.emit('control', { action: 'arm_head' });
+            } else {
+                socket.emit('control', { action: 'disarm_head' });
+            }
+        }
+
+        function setArmUI(armed) {
+            headArmed = !!armed;
+            const btn = document.getElementById('btn-arm');
+            if (!btn) return;
+            btn.textContent = headArmed ? '🛑 Disarm Head' : '🦾 Arm Head';
+            btn.classList.toggle('armed', headArmed);
+        }
+
+        socket.on('head_armed_status', (data) => {
+            setArmUI(data && data.armed);
+            if (data && data.armed === false) {
+                // Arm may have failed (boards busy); surface a hint once.
+                console.log('Head armed status:', data);
+            }
+        });
+
         function toggleMute() {
             isMuted = !isMuted;
             socket.emit('control', { action: 'mute', value: isMuted });
@@ -1394,6 +1258,11 @@
         function toggleSettings() {
             const settings = document.getElementById('settings');
             settings.classList.toggle('active');
+            // Re-scan audio devices each time settings opens so a mic that woke
+            // up (or was just plugged in) shows up without a page reload.
+            if (settings.classList.contains('active')) {
+                loadDevices();
+            }
         }
 
         // Send settings updates
@@ -1421,203 +1290,9 @@
             socket.emit('control', { action, value: e.target.value });
         });
 
-        document.getElementById('closed-angle').addEventListener('change', (e) => {
-            socket.emit('control', { action: 'set_closed_angle', value: parseInt(e.target.value) });
-        });
-
-        document.getElementById('max-angle').addEventListener('change', (e) => {
-            socket.emit('control', { action: 'set_max_angle', value: parseInt(e.target.value) });
-        });
-
-        document.getElementById('speech-speed').addEventListener('input', (e) => {
-            const value = parseInt(e.target.value);
-            document.getElementById('speech-speed-value').textContent = value;
-            socket.emit('control', { action: 'set_speech_speed', value: value });
-        });
-
-        // Helper function to clamp angle values
-        function clampAngle(value, min = 0, max = 180) {
-            return Math.max(min, Math.min(max, value));
-        }
-
-        const jawStopAngle = document.getElementById('jaw-stop-angle');
-        if (jawStopAngle) {
-            jawStopAngle.addEventListener('change', (e) => {
-                const value = clampAngle(parseInt(e.target.value));
-                e.target.value = value;
-                socket.emit('control', { action: 'set_jaw_stop_angle', value: value });
-            });
-        }
-
-        const jawOpenAngle = document.getElementById('jaw-open-angle');
-        if (jawOpenAngle) {
-            jawOpenAngle.addEventListener('change', (e) => {
-                const value = clampAngle(parseInt(e.target.value));
-                e.target.value = value;
-                socket.emit('control', { action: 'set_jaw_open_angle', value: value });
-            });
-        }
-
-        const jawCloseAngle = document.getElementById('jaw-close-angle');
-        if (jawCloseAngle) {
-            jawCloseAngle.addEventListener('change', (e) => {
-                const value = clampAngle(parseInt(e.target.value));
-                e.target.value = value;
-                socket.emit('control', { action: 'set_jaw_close_angle', value: value });
-            });
-        }
-
-        // Face tracking controls
-        const faceTrackingCheckbox = document.getElementById('face-tracking-enabled');
-        if (faceTrackingCheckbox) {
-            console.log('✅ Face tracking checkbox found');
-            faceTrackingCheckbox.addEventListener('change', (e) => {
-                console.log('Face tracking checkbox changed:', e.target.checked);
-                const statusElement = document.getElementById('face-tracking-status');
-                if (e.target.checked) {
-                    statusElement.textContent = '🟡 Starting...';
-                    statusElement.style.color = '#f39c12';
-                }
-                console.log('Emitting toggle_face_tracking:', e.target.checked);
-                socket.emit('control', { action: 'toggle_face_tracking', value: e.target.checked });
-            });
-        } else {
-            console.error('❌ Face tracking checkbox NOT found!');
-        }
-
-        // Listen for face tracking status updates
-        socket.on('face_tracking_status', (data) => {
-            console.log('Received face_tracking_status:', data);
-            const statusElement = document.getElementById('face-tracking-status');
-            const checkbox = document.getElementById('face-tracking-enabled');
-
-            if (data.enabled) {
-                statusElement.textContent = '🟢 Active';
-                statusElement.style.color = '#27ae60';
-                checkbox.checked = true;
-            } else {
-                statusElement.textContent = '⚪ Inactive';
-                statusElement.style.color = '#999';
-                checkbox.checked = false;
-            }
-        });
-
-        function testFaceTracking() {
-            console.log('Testing face tracking connection...');
-            console.log('Socket connected:', socket.connected);
-            alert('Check browser console (F12) for connection status');
-        }
-
-        document.getElementById('servo-config').addEventListener('change', (e) => {
-            socket.emit('control', { action: 'set_servo_config', value: e.target.value });
-        });
-
-        document.getElementById('camera-index').addEventListener('change', (e) => {
-            socket.emit('control', { action: 'set_camera_index', value: parseInt(e.target.value) });
-        });
-
-        function testJaw() {
-            socket.emit('control', { action: 'test_jaw' });
-        }
-
-        document.getElementById('eye-test-angle').addEventListener('input', (e) => {
-            const value = parseInt(e.target.value);
-            document.getElementById('eye-test-angle-value').textContent = value + '°';
-        });
-
-        function testEyeServo() {
-            const channel = parseInt(document.getElementById('eye-servo-select').value);
-            const angle = parseInt(document.getElementById('eye-test-angle').value);
-            socket.emit('control', { action: 'test_eye_servo', channel: channel, angle: angle });
-        }
-
-        function centerAllEyes() {
-            socket.emit('control', { action: 'center_all_eyes' });
-        }
-
-        function saveEyeServoConfig() {
-            const channel = parseInt(document.getElementById('eye-servo-select').value);
-            const minAngle = clampAngle(parseInt(document.getElementById('eye-min-angle').value));
-            const maxAngle = clampAngle(parseInt(document.getElementById('eye-max-angle').value));
-            const centerAngle = clampAngle(parseInt(document.getElementById('eye-center-angle').value));
-
-            // Update displayed values
-            document.getElementById('eye-min-angle').value = minAngle;
-            document.getElementById('eye-max-angle').value = maxAngle;
-            document.getElementById('eye-center-angle').value = centerAngle;
-
-            socket.emit('control', {
-                action: 'save_eye_config',
-                channel: channel,
-                min_angle: minAngle,
-                max_angle: maxAngle,
-                center_angle: centerAngle
-            });
-
-            alert(`✅ Saved config for Eye Servo ${channel}\nMin: ${minAngle}° | Max: ${maxAngle}° | Center: ${centerAngle}°`);
-        }
-
-        function loadEyeServoConfig() {
-            const channel = parseInt(document.getElementById('eye-servo-select').value);
-            socket.emit('control', { action: 'load_eye_config', channel: channel });
-        }
-
-        // Listen for loaded eye config
-        socket.on('eye_config_loaded', (data) => {
-            document.getElementById('eye-min-angle').value = data.min_angle;
-            document.getElementById('eye-max-angle').value = data.max_angle;
-            document.getElementById('eye-center-angle').value = data.center_angle;
-        });
-
-        // Load config when servo selection changes
-        document.getElementById('eye-servo-select').addEventListener('change', () => {
-            loadEyeServoConfig();
-        });
-
-        function testEyePosition(position) {
-            const channel = parseInt(document.getElementById('eye-servo-select').value);
-            let angle;
-
-            if (position === 'min') {
-                angle = parseInt(document.getElementById('eye-min-angle').value);
-            } else if (position === 'center') {
-                angle = parseInt(document.getElementById('eye-center-angle').value);
-            } else if (position === 'max') {
-                angle = parseInt(document.getElementById('eye-max-angle').value);
-            }
-
-            socket.emit('control', { action: 'test_eye_servo', channel: channel, angle: angle });
-            document.getElementById('eye-test-angle').value = angle;
-            document.getElementById('eye-test-angle-value').textContent = angle + '°';
-        }
-
-        function sweepEyeServo() {
-            const channel = parseInt(document.getElementById('eye-servo-select').value);
-            const minAngle = parseInt(document.getElementById('eye-min-angle').value);
-            const maxAngle = parseInt(document.getElementById('eye-max-angle').value);
-            const centerAngle = parseInt(document.getElementById('eye-center-angle').value);
-
-            socket.emit('control', {
-                action: 'sweep_eye_servo',
-                channel: channel,
-                min_angle: minAngle,
-                max_angle: maxAngle,
-                center_angle: centerAngle
-            });
-        }
-
-        function testBlink() {
-            const leftEye = document.getElementById('left-eye');
-            const rightEye = document.getElementById('right-eye');
-
-            leftEye.classList.add('blinking');
-            rightEye.classList.add('blinking');
-
-            setTimeout(() => {
-                leftEye.classList.remove('blinking');
-                rightEye.classList.remove('blinking');
-            }, 120);
-        }
+        // Servo/jaw/eye calibration and face-tracking controls were moved to the
+        // dedicated calibration page. The head is driven automatically by the
+        // voice app (phoneme visemes, gaze, expressions) once armed.
     </script>
 
     <!-- VRM avatar renderer. Exposes window.avatar.{setViseme,setEye,setBlink};
