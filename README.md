@@ -2,7 +2,17 @@
 
 AI Robot Assistant is a real-time, speech-to-speech social robot named **Sunny**. It combines the **OpenAI Realtime API** (ChatGPT-style live voice conversations) or **Amazon Nova 2 Sonic** with a browser-based VRM avatar, audio-driven lip sync, face tracking, face recognition, emotion-aware behavior, and optional animatronic servos.
 
-Sunny is designed to help people practice social conversations in a friendly, low-pressure setting. The project can run as a virtual avatar with no servo hardware, or drive a physical robot head through an FT232H and PCA9685 controller.
+Sunny is designed to help people practice social conversations in a friendly, low-pressure setting. The project can run as a virtual avatar with no servo hardware, or drive a physical **Will Cogley animatronic head** (20 actuators across two FT232H + PCA9685 boards).
+
+## Versions
+
+| Branch | What it is |
+|---|---|
+| `main` | **v2** (current): OpenAI Realtime + Nova 2 Sonic, VRM avatar, HeadAudio phoneme visemes, face recognition/emotion, dual-board Will Cogley head, dashboard UI, personalities |
+| `v1` | Original release: Amazon Nova Sonic voice, amplitude-driven jaw, InMoov-style single-board eye/jaw servos, classic web control panel |
+| `v2` | Development branch that was merged into `main` |
+
+Check out `v1` if you need the original single-board InMoov setup.
 
 ## Demo
 
@@ -16,8 +26,12 @@ _Click the image to watch the robot in action._
 - **Amazon Nova 2 Sonic** as an alternate provider and automatic fallback when no OpenAI API key is available
 - **Low-latency streaming audio** with live user and assistant transcripts
 - **VRM avatar** with gaze, blinking, lip sync, and model-controlled expressions
-- **Physical jaw animation** driven by speech amplitude
-- **Phoneme-aware avatar visemes** with HeadAudio-derived analysis and amplitude fallback
+- **Phoneme-aware visemes** (HeadAudio-derived) driving both the VRM avatar and the physical mouth from one stream, with amplitude fallback
+- **Will Cogley animatronic head** on two FT232H + PCA9685 boards: eyes, eyelids, eyebrows, lips, mouth corners, linked jaw pair, and tongue, with calibration-relative poses
+- **Expressions and viseme poses** stored in `config/poses.json` that carry over when you recalibrate
+- **Web servo calibration tool** with named positions per actuator and a release-all stop
+- **Dashboard UI** with avatar, live chat transcript, known people, camera preview, and demo mode
+- **Personality modes**: therapist (default), neutral, playful, curious, kid
 - **Face tracking** with OpenCV and virtual or physical eye movement
 - **Face recognition** with DeepFace/Facenet and a local enrollment database
 - **Emotion analysis** with HSEmotion ONNX or DeepFace FER
@@ -43,9 +57,9 @@ Microphone
                     │                                   │
              Speaker playback                  Lip-sync pipeline
                                                 ├── VRM visemes
-                                                └── jaw servo
+                                                └── head mouth poses (lips/jaw)
 
-Webcam ── OpenCV tracking ── gaze/blink ── VRM avatar and optional eye servos
+Webcam ── OpenCV tracking ── gaze/blink ── VRM avatar and optional head eyes/eyelids
    │
    └── DeepFace identity + HSEmotion/DeepFace emotion
              │
@@ -81,31 +95,45 @@ The launch scripts are Unix shell scripts. Windows is not currently documented o
 
 The avatar and voice assistant work without servo hardware. To run without a webcam, set `face_tracking_enabled` and `face_recognition_enabled` to `false` in `config/voice_assistant_settings.json`.
 
-### Optional physical robot hardware
+### Optional physical robot hardware (Will Cogley head)
 
-- FT232H USB-to-I²C adapter
-- PCA9685 16-channel servo driver at address `0x40`
-- Standard positional servos
-- 5–6 V servo power supply sized for the connected servos
-- Common ground between the servo supply and controller
+- Will Cogley animatronic head
+- **Two** FT232H USB-to-I²C adapters, each driving a PCA9685 16-channel servo board at address `0x40`
+- 20 calibrated actuators (the jaw is a linked servo pair)
+- 5–6 V servo power supply sized for all the servos
+- Common ground between the servo supply and the controllers
 
 Do not power a bank of servos directly from the computer or FT232H.
 
-### Default servo channel layout
+Each board is selected by its stable FT232H serial URL (for example `ftdi://ftdi:232h:<serial>/1`), set under `boards` in `config/servo_calibration.json`. Update these serials for your own adapters.
 
-| Channel | Function |
-|---:|---|
-| 0 | Left eye horizontal |
-| 1 | Left eye vertical |
-| 2 | Left upper eyelid |
-| 3 | Left lower eyelid |
-| 4 | Right eye horizontal |
-| 5 | Right eye vertical |
-| 6 | Right upper eyelid |
-| 7 | Right lower eyelid |
-| 8 | Jaw |
+### Actuator map
 
-The `inmoov`, `original`, and `simple` layouts are defined in `src/servo_config.py`. The eight-channel InMoov eye layout is the primary configuration used by the current tracking implementation.
+| Board 1 | Board 2 |
+|---|---|
+| eye X / eye Y | lips (top left/right, bottom left/right) |
+| eyelids (left/right, top/bottom) | mouth corners (left/right, top/bottom) |
+| eyebrows (left/right, front/back) | jaw (linked pair), tongue |
+
+Exact channels and calibrated travel live in `config/servo_calibration.json`. Poses (`neutral`, `happy`, `sad`, `angry`, `surprised`, `blink`, plus the visemes `rest`, `MBP`, `FV`, `AI`, `E`, `O`, `U`, `L`, `WQ`) live in `config/poses.json` as calibration-relative values. Regenerate the defaults with `scripts/seed_poses.py`.
+
+### Hardware safety model
+
+- The head is **unarmed by default**. No servo moves until you arm it from the dashboard (`head_hardware_armed`), and disarming releases every channel.
+- Every value is clamped to the actuator's calibrated travel.
+- Only one process can own the FT232H adapters. Don't run the calibration server and the voice assistant at the same time.
+
+### Calibrating the head
+
+```bash
+# Web calibration UI (http://127.0.0.1:8600)
+venv/bin/python scripts/servo_calibration_server.py
+
+# Or the single-channel CLI, e.g. read board 1 with no movement
+python scripts/servo_calibrate.py --board 1 read
+```
+
+Calibration pulses are hard-clamped to 600–2400 µs, and the UI defaults to a narrower 1000–2000 µs range.
 
 ## Installation
 
@@ -203,10 +231,8 @@ A representative configuration is:
   "emotion_min_confidence": 0.4,
   "emotion_neutral_bias": 0.05,
   "emotion_smoothing_window": 3,
-  "servo_config": "inmoov",
-  "jaw_open_angle": 100,
-  "jaw_close_angle": 0,
-  "jaw_servo_min_change": 2,
+  "head_hardware_armed": false,
+  "personality": "therapist",
   "avatar_vrm_file": "Avatar 1.vrm",
   "viseme_analyzer": "headaudio",
   "viseme_sync_delay_ms": null,
@@ -239,8 +265,8 @@ Do not copy API keys into documentation or commit them to the settings file.
 | `emotion_min_confidence` | Suppresses low-confidence non-neutral results |
 | `emotion_neutral_bias` | Requires an emotion to beat neutral by this margin |
 | `emotion_smoothing_window` | Number of recent results used to reduce flicker |
-| `servo_config` | `inmoov`, `original`, or `simple` |
-| `jaw_open_angle` / `jaw_close_angle` | Physical jaw endpoints in degrees |
+| `head_hardware_armed` | Whether the Will Cogley head is armed; normally toggled from the dashboard |
+| `personality` | `therapist` (default), `neutral`, `playful`, `curious`, or `kid`; applies on the next session |
 | `avatar_vrm_file` | Basename of a `.vrm` file in `templates/avatars/` |
 | `viseme_analyzer` | `headaudio` for phoneme visemes or `amplitude` for fallback shapes |
 | `viseme_sync_delay_ms` | Manual avatar/audio sync delay; `null` uses measured output latency |
@@ -333,15 +359,18 @@ For a process started by `start.sh`, use:
 
 | URL | Purpose |
 |---|---|
-| `http://127.0.0.1:8080/` | Main VRM avatar and control panel |
+| `http://127.0.0.1:8080/` | Dashboard: avatar, live transcript, known people, camera, demo mode, personality, head arm/disarm |
+| `http://127.0.0.1:8080/classic` | Classic single-column control panel |
 | `http://127.0.0.1:8080/avatar` | Standalone VRM viewer |
 | `GET /avatar/model` | Serves the configured local VRM file |
+| `GET /api/people` | Known enrolled people |
+| `GET /camera.jpg` | Current camera preview frame |
 | `GET /api/status` | Current viseme, text, and mouth intensity |
 | `GET /api/devices` | Available PyAudio input/output devices |
 | `GET /api/settings` | Current UI settings with the OpenAI key masked |
 | `POST /api/settings` | Updates the supported provider, audio, and tracking settings |
 
-The main UI includes provider and audio selection, Start/Stop controls, face-tracking controls, live identity/emotion state, jaw tests, eye-servo calibration, gaze, blinking, expressions, and lip-synced VRM animation.
+The dashboard includes provider and audio selection, Start/Stop controls, a live chat transcript, known people, a camera preview and picker, demo mode, a personality selector, head arm/disarm, and the lip-synced VRM avatar. The classic page keeps the older face-tracking and servo test controls. Servo calibration is a separate app on port 8600 (see **Calibrating the head**).
 
 Advanced avatar tuning:
 
@@ -394,9 +423,10 @@ The output audio path runs at 24 kHz:
 
 ```text
 Assistant PCM audio
-    ├── RMS amplitude → smoothing → physical jaw opening
-    └── HeadAudio-derived phoneme analysis → VRM aa/ih/ou/ee/oh visemes
-                                      └── amplitude fallback when unavailable
+    └── HeadAudio-derived phoneme analysis (15 Oculus visemes)
+            ├── VRM aa/ih/ou/ee/oh visemes
+            ├── physical head viseme poses (mouth only, so lip sync never fights gaze)
+            └── amplitude fallback when the model is unavailable
 ```
 
 Audio callbacks are aligned with speaker writes. The OpenAI client also estimates output-buffer latency, and `viseme_sync_delay_ms` can override the automatic compensation when manual tuning is needed.
@@ -422,8 +452,8 @@ The root-level diagnostics interact with local audio or hardware:
 
 ```bash
 python test_audio_mouth.py       # microphone/amplitude display
-python test_i2c_connection.py    # scans I²C and may move the jaw servo
-python test_jaw_servo.py         # repeatedly moves the channel-8 jaw servo
+python test_i2c_connection.py    # legacy single-board I²C scan; may move a servo
+python test_jaw_servo.py         # legacy v1 jaw test (channel 8); not for the dual-board head
 ```
 
 Disconnect mechanical loads or verify safe servo limits before running hardware diagnostics.
@@ -544,7 +574,8 @@ The server degrades to voice plus avatar when optional face-analysis initializat
 
 ### Servo controller is unavailable
 
-- Confirm the FT232H is connected and visible to the operating system.
+- Confirm both FT232H adapters are connected and their serials match `boards` in `config/servo_calibration.json`.
+- Make sure the calibration server isn't running, since it holds the adapters.
 - Verify PCA9685 address `0x40`, I²C wiring, common ground, and external servo power.
 - Use conservative angles before running test or sweep controls.
 - The application continues in virtual-avatar mode when ServoKit initialization fails.
@@ -562,10 +593,15 @@ AIRobotAssistant/
 ├── requirements.txt                    # Runtime and test dependencies
 ├── config/
 │   ├── voice_assistant_settings.json   # Runtime settings
+│   ├── servo_calibration.json          # Board serials + 20-actuator calibration
+│   ├── poses.json                      # Expression and viseme poses
 │   └── face_database.json              # Local face embeddings
 ├── scripts/
 │   ├── run_local.sh                    # Minimal local launcher
 │   ├── activate_venv.sh                # Virtual-environment helper
+│   ├── servo_calibration_server.py     # Web servo calibration (port 8600)
+│   ├── servo_calibrate.py              # Safe single-channel calibration CLI
+│   ├── seed_poses.py                   # Regenerate default poses
 │   ├── setup_agentcore_memory.py       # AgentCore Memory setup
 │   └── refresh_aws_creds.sh            # Environment-specific legacy credential helper
 ├── src/
@@ -580,11 +616,14 @@ AIRobotAssistant/
 │   ├── face_recognition_system.py      # Enrollment and identity matching
 │   ├── deepface_analyzer.py            # Background identity/emotion analysis
 │   ├── emotion_detector.py             # HSEmotion/DeepFace emotion state
-│   ├── eye_controller.py               # Eye and eyelid servo control
-│   ├── servo_config.py                 # Servo layout presets
+│   ├── head_hardware.py                # Dual-board Will Cogley head driver
+│   ├── eye_controller.py               # Legacy v1 InMoov eye control
+│   ├── servo_config.py                 # Legacy v1 servo layout presets
 │   └── mouth_visualizer.py             # Flask/Socket.IO web backend
 ├── templates/
-│   ├── mouth.html                      # Main controls and embedded avatar
+│   ├── dashboard.html                  # Main dashboard
+│   ├── mouth.html                      # Classic controls and embedded avatar
+│   ├── servo_calibration.html          # Calibration UI
 │   ├── avatar_test.html                # Standalone VRM viewer
 │   └── avatars/                        # Local VRM files
 └── tests/unit/                          # Automated unit tests
@@ -616,6 +655,8 @@ Licensed under the Apache License 2.0. See [LICENSE](LICENSE).
 - [Amazon Nova Sonic](https://aws.amazon.com/nova/speech/)
 - [AWS Bedrock](https://aws.amazon.com/bedrock/)
 - [Kiro](https://kiro.dev/)
+- [Will Cogley](https://www.willcogley.com/) animatronic head
+- [HeadAudio](https://github.com/met4citizen/HeadAudio) (MIT) viseme detection
 - [InMoov](https://inmoov.fr/)
 - [Adafruit](https://www.adafruit.com/)
 - [OpenCV](https://opencv.org/)
